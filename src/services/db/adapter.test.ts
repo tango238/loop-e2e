@@ -67,6 +67,14 @@ describe('createDbAdapter (postgres)', () => {
     await adapter.query('SELECT 1', [])
     expect(pool.query).toHaveBeenCalledWith('SELECT 1', [])
   })
+
+  it('close() calls pool.end()', async () => {
+    const pool = makeFakePgPool([])
+    const adapter = createDbAdapter(pgConn, 'secret', { pgPool: () => pool })
+
+    await adapter.close()
+    expect(pool.end).toHaveBeenCalledOnce()
+  })
 })
 
 describe('createDbAdapter (mysql)', () => {
@@ -89,6 +97,14 @@ describe('createDbAdapter (mysql)', () => {
 
     await expect(adapter.query('SELECT 1', [])).rejects.toThrow('MySQL query failed')
     await expect(adapter.query('SELECT 1', [])).rejects.not.toThrow('mypass')
+  })
+
+  it('close() calls connection.end()', async () => {
+    const conn = makeFakeMysqlConn([])
+    const adapter = createDbAdapter(mysqlConn, 'secret', { mysqlConn: () => conn })
+
+    await adapter.close()
+    expect(conn.end).toHaveBeenCalledOnce()
   })
 })
 

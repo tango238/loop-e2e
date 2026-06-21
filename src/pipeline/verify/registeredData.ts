@@ -77,88 +77,113 @@ function buildWhereClause(
   return { sql: clauses.join(' AND '), params }
 }
 
+type DbExpectWithScenario = {
+  scenario: Scenario
+  dbExpect: Scenario['expectedDbState'][number]
+}
+
 /**
  * Verifies DB state expectations from scenario.expectedDbState.
- * For each entry: queries the DB and compares actual row vs expectedValues.
+ * Groups expectations by connection name so ONE adapter is created per DB connection.
+ * The adapter is closed in a finally block to prevent connection leaks.
  */
 export async function verifyRegisteredData(deps: RegisteredDataDeps): Promise<VerifyFinding[]> {
   const { scenarios, config, secrets, dbDrivers } = deps
   const findings: VerifyFinding[] = []
 
+  // Collect all DB expectations across all scenarios, grouped by connection name
+  const grouped = new Map<string, DbExpectWithScenario[]>()
   for (const scenario of scenarios) {
     for (const dbExpect of scenario.expectedDbState) {
-      const { connection, table, match, expectedValues } = dbExpect
+      const existing = grouped.get(dbExpect.connection) ?? []
+      grouped.set(dbExpect.connection, [...existing, { scenario, dbExpect }])
+    }
+  }
 
-      const adapter = resolveAdapter(connection, config, secrets, dbDrivers)
-      if (!adapter) {
+  // Process each connection's expectations with ONE adapter instance, closing in finally
+  for (const [connectionName, items] of grouped.entries()) {
+    const adapter = resolveAdapter(connectionName, config, secrets, dbDrivers)
+    if (!adapter) {
+      // Push a finding for each item that references a missing connection
+      for (const { scenario, dbExpect } of items) {
         findings.push({
           category: 'registered-data',
           severity: 'medium',
-          title: `DB connection "${connection}" not configured`,
-          detail: `Scenario "${scenario.title}" references connection "${connection}" which is not in config.databases.`,
-          evidence: `scenario:${scenario.id} connection:${connection}`,
-        })
-        continue
-      }
-
-      // Guard against SQL structural injection via table and column identifiers.
-      if (!isValidIdentifier(table)) {
-        throw new Error(
-          `Invalid SQL identifier for table: "${table}" in scenario "${scenario.id}". Only [a-zA-Z_][a-zA-Z0-9_]* is allowed.`,
-        )
-      }
-      const invalidCol = Object.keys(match).find((col) => !isValidIdentifier(col))
-      if (invalidCol) {
-        throw new Error(
-          `Invalid SQL identifier for column: "${invalidCol}" in scenario "${scenario.id}". Only [a-zA-Z_][a-zA-Z0-9_]* is allowed.`,
-        )
-      }
-
-      const dbConf = config.databases.find((d) => d.name === connection)!
-      const { sql: whereClause, params } = buildWhereClause(match, dbConf.type)
-      const sql = `SELECT * FROM ${table} WHERE ${whereClause} LIMIT 1`
-
-      try {
-        const rows = await adapter.query(sql, params)
-
-        if (rows.length === 0) {
-          findings.push({
-            category: 'registered-data',
-            severity: 'high',
-            title: `Expected DB row not found in "${table}"`,
-            detail: `Scenario "${scenario.title}": no row matched in ${connection}.${table} for the given conditions.`,
-            evidence: `scenario:${scenario.id} table:${table} match:${JSON.stringify(match)}`,
-          })
-          continue
-        }
-
-        const mismatches = diffRow(
-          expectedValues as Record<string, unknown>,
-          rows[0] as Record<string, unknown>,
-        )
-        for (const { field, expected, actual } of mismatches) {
-          findings.push({
-            category: 'registered-data',
-            severity: 'high',
-            title: `DB field mismatch: ${table}.${field}`,
-            detail: `Scenario "${scenario.title}": expected ${table}.${field}=${JSON.stringify(expected)} but got ${JSON.stringify(actual)}.`,
-            evidence: `scenario:${scenario.id} table:${table} field:${field} expected:${JSON.stringify(expected)} actual:${JSON.stringify(actual)}`,
-          })
-        }
-      } catch (error) {
-        const rawMsg = error instanceof Error ? error.message : String(error)
-        const dbConf2 = config.databases.find((d) => d.name === connection)
-        const password = (dbConf2 ? (secrets[dbConf2.passwordEnv] ?? '') : '')
-        const msg = maskSecrets(rawMsg, [password])
-        logger.warn({ error, scenario: scenario.id, table }, 'registeredData verify: query failed')
-        findings.push({
-          category: 'registered-data',
-          severity: 'medium',
-          title: `DB query error for "${table}"`,
-          detail: `Scenario "${scenario.title}": query failed — ${msg}`,
-          evidence: `scenario:${scenario.id} table:${table}`,
+          title: `DB connection "${connectionName}" not configured`,
+          detail: `Scenario "${scenario.title}" references connection "${connectionName}" which is not in config.databases.`,
+          evidence: `scenario:${scenario.id} connection:${connectionName}`,
         })
       }
+      continue
+    }
+
+    try {
+      for (const { scenario, dbExpect } of items) {
+        const { table, match, expectedValues } = dbExpect
+
+        // Guard against SQL structural injection via table and column identifiers.
+        if (!isValidIdentifier(table)) {
+          throw new Error(
+            `Invalid SQL identifier for table: "${table}" in scenario "${scenario.id}". Only [a-zA-Z_][a-zA-Z0-9_]* is allowed.`,
+          )
+        }
+        const invalidCol = Object.keys(match).find((col) => !isValidIdentifier(col))
+        if (invalidCol) {
+          throw new Error(
+            `Invalid SQL identifier for column: "${invalidCol}" in scenario "${scenario.id}". Only [a-zA-Z_][a-zA-Z0-9_]* is allowed.`,
+          )
+        }
+
+        const dbConf = config.databases.find((d) => d.name === connectionName)!
+        const { sql: whereClause, params } = buildWhereClause(match, dbConf.type)
+        const sql = `SELECT * FROM ${table} WHERE ${whereClause} LIMIT 1`
+
+        try {
+          const rows = await adapter.query(sql, params)
+
+          if (rows.length === 0) {
+            findings.push({
+              category: 'registered-data',
+              severity: 'high',
+              title: `Expected DB row not found in "${table}"`,
+              detail: `Scenario "${scenario.title}": no row matched in ${connectionName}.${table} for the given conditions.`,
+              evidence: `scenario:${scenario.id} table:${table} match:${JSON.stringify(match)}`,
+            })
+            continue
+          }
+
+          const mismatches = diffRow(
+            expectedValues as Record<string, unknown>,
+            rows[0] as Record<string, unknown>,
+          )
+          for (const { field, expected, actual } of mismatches) {
+            findings.push({
+              category: 'registered-data',
+              severity: 'high',
+              title: `DB field mismatch: ${table}.${field}`,
+              detail: `Scenario "${scenario.title}": expected ${table}.${field}=${JSON.stringify(expected)} but got ${JSON.stringify(actual)}.`,
+              evidence: `scenario:${scenario.id} table:${table} field:${field} expected:${JSON.stringify(expected)} actual:${JSON.stringify(actual)}`,
+            })
+          }
+        } catch (error) {
+          const rawMsg = error instanceof Error ? error.message : String(error)
+          const dbConf2 = config.databases.find((d) => d.name === connectionName)
+          const password = (dbConf2 ? (secrets[dbConf2.passwordEnv] ?? '') : '')
+          const msg = maskSecrets(rawMsg, [password])
+          logger.warn({ error, scenario: scenario.id, table }, 'registeredData verify: query failed')
+          findings.push({
+            category: 'registered-data',
+            severity: 'medium',
+            title: `DB query error for "${table}"`,
+            detail: `Scenario "${scenario.title}": query failed — ${msg}`,
+            evidence: `scenario:${scenario.id} table:${table}`,
+          })
+        }
+      }
+    } finally {
+      await adapter.close().catch((err) => {
+        logger.warn({ err, connectionName }, 'registeredData verify: adapter.close() failed')
+      })
     }
   }
 

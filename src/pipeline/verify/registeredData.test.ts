@@ -289,4 +289,28 @@ describe('verifyRegisteredData', () => {
     expect(titles).toContain('DB field mismatch: users.status')
     expect(titles).toContain('DB field mismatch: users.role')
   })
+
+  it('closes each adapter after query, even on success', async () => {
+    const closeSpy = vi.fn().mockResolvedValue(undefined)
+    const pool: PgPool = {
+      query: vi.fn().mockResolvedValue({ rows: [{ email: 'a@b.com', status: 'active' }] }),
+      end: closeSpy,
+    }
+    const scenario = makeScenario([{
+      connection: 'main-pg',
+      table: 'users',
+      match: { email: 'a@b.com' },
+      expectedValues: { status: 'active' },
+    }])
+
+    await verifyRegisteredData({
+      scenarios: [scenario],
+      config: minimalConfig,
+      secrets: { DB_PASSWORD: 'pw' },
+      dbDrivers: { pgPool: () => pool },
+    })
+
+    // adapter.close() → pool.end() must have been called
+    expect(closeSpy).toHaveBeenCalledOnce()
+  })
 })

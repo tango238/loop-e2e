@@ -7,4 +7,5 @@ export type Row = Record<string, unknown>
  */
 export interface DbAdapter {
   query(sql: string, params: unknown[]): Promise<Row[]>
+  close(): Promise<void>
 }

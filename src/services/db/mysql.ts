@@ -74,5 +74,8 @@ export function createMysqlAdapter(
         throw new Error(`MySQL query failed: ${maskSecrets(msg, [password])}`)
       }
     },
+    async close(): Promise<void> {
+      await connection.end()
+    },
   }
 }

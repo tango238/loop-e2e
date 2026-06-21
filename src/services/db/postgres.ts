@@ -59,5 +59,8 @@ export function createPostgresAdapter(
         throw new Error(`PostgreSQL query failed: ${maskSecrets(msg, [password])}`)
       }
     },
+    async close(): Promise<void> {
+      await pool.end()
+    },
   }
 }
