@@ -14,6 +14,8 @@ import type { Llm } from '../../src/services/llm/client.js'
 import type { CollectResult } from '../../src/pipeline/collect.js'
 import type { DiffFinding, VerifyFinding, RawPage, SiteStructure, PriorState } from '../../src/domain/types.js'
 import type { Scenario } from '../../src/scenario/schema.js'
+import { runInit, type InitDeps } from '../../src/cli/commands/init.js'
+import { runScenario, type ScenarioDeps } from '../../src/cli/commands/scenario.js'
 import { runRun } from '../../src/cli/commands/run.js'
 import { runFeedback } from '../../src/cli/commands/feedback.js'
 import { saveScenario, loadScenarios } from '../../src/scenario/schema.js'
@@ -21,6 +23,8 @@ import { loadFeedback, loadKnownFindings, saveBaseline } from '../../src/state/s
 import { statePaths } from '../../src/state/paths.js'
 import { writeYaml, ensureDir } from '../../src/util/fs.js'
 import type { Report } from '../../src/domain/types.js'
+import type { Config } from '../../src/config/schema.js'
+import { saveConfig } from '../../src/config/save.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -92,6 +96,43 @@ function makeReport(runId: string, verifyFindings: VerifyFinding[]): Report {
   }
 }
 
+function makeConfig(root: string): Config {
+  return {
+    repositories: [
+      {
+        name: 'example',
+        label: 'Example Repo',
+        url: 'https://github.com/example/repo',
+        role: 'frontend',
+        audience: 'user',
+      },
+    ],
+    targets: [
+      {
+        name: 'staging',
+        baseUrl: 'https://example.com',
+        auth: { strategy: 'none' },
+      },
+    ],
+    databases: [],
+    schedule: { intervalMinutes: 60 },
+    scenarioDir: join(root, 'scenarios'),
+    github: { labels: { ready: 'e2e-ready', autoDetect: 'e2e-auto' } },
+    baseline: { commit: false },
+    models: {
+      planning: 'claude-opus-4-8',
+      report: 'claude-sonnet-4-6',
+      verification: 'claude-opus-4-8',
+    },
+    ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+    refutation: {
+      panelSize: 3,
+      confidenceThreshold: 0.8,
+      lenses: ['correctness', 'security', 'intentionality'],
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Integration suite
 // ---------------------------------------------------------------------------
@@ -109,6 +150,125 @@ describe('integration: init → scenario → run → feedback', () => {
   afterEach(async () => {
     await rm(root, { recursive: true, force: true })
     vi.restoreAllMocks()
+  })
+
+  it('full four-command chain: runInit → runScenario → runRun → runFeedback with mocked deps', async () => {
+    // --- Step 1: runInit with mocked prompt + no github ---
+    const config = makeConfig(root)
+    const initDeps: InitDeps = {
+      prompt: vi.fn().mockResolvedValue(config),
+      ensureLabels: vi.fn().mockResolvedValue(undefined),
+      githubClient: null,
+    }
+    await runInit(root, {}, initDeps)
+
+    // Config file must exist
+    const configPath = join(root, 'loop-e2e.config.yaml')
+    const configRaw = await readFile(configPath, 'utf8')
+    expect(configRaw).toContain('staging')
+
+    // --- Step 2: runScenario with mocked collectRequirements + generateScenarios ---
+    // loadConfig reads env vars for secrets; provide stubs so it doesn't throw
+    const origAnthropicKey = process.env['ANTHROPIC_API_KEY']
+    const origGithubToken = process.env['GITHUB_TOKEN']
+    process.env['ANTHROPIC_API_KEY'] = 'test-key'
+    process.env['GITHUB_TOKEN'] = 'test-token'
+    try {
+      const generatedScenario = makeScenario('sc-four-cmd')
+      const scenarioDeps: ScenarioDeps = {
+        llm: makeLlm(),
+        collectRequirements: vi.fn().mockResolvedValue([]),
+        generateScenarios: vi.fn().mockResolvedValue([generatedScenario]),
+        confirm: vi.fn().mockResolvedValue(true),
+      }
+      await runScenario(root, {}, scenarioDeps)
+    } finally {
+      if (origAnthropicKey === undefined) {
+        delete process.env['ANTHROPIC_API_KEY']
+      } else {
+        process.env['ANTHROPIC_API_KEY'] = origAnthropicKey
+      }
+      if (origGithubToken === undefined) {
+        delete process.env['GITHUB_TOKEN']
+      } else {
+        process.env['GITHUB_TOKEN'] = origGithubToken
+      }
+    }
+
+    // Scenario file must exist
+    const savedScenarios = await loadScenarios(scenarioDir)
+    expect(savedScenarios).toHaveLength(1)
+    expect(savedScenarios[0]?.id).toBe('sc-four-cmd')
+
+    // --- Step 3: runRun with mocked collect/detect/verify/writeReport ---
+    const structure = makeStructure()
+    await saveBaseline(root, structure)
+    const rawPage = makeRawPage()
+    const verifyFinding: VerifyFinding = {
+      category: 'security',
+      severity: 'high',
+      title: 'Missing CSRF protection',
+      detail: 'No CSRF token found in form.',
+      evidence: '<form>...</form>',
+    }
+    const emptyPrior: PriorState = { baseline: structure, latestReport: null, feedback: [] }
+    const llm = makeLlm()
+
+    let verifyReceivedPages: RawPage[] = []
+    await runRun(root, {}, {
+      collect: vi.fn().mockResolvedValue({
+        structure,
+        prior: emptyPrior,
+        rawPages: [rawPage],
+      } satisfies CollectResult),
+      detectDiffs: vi.fn().mockResolvedValue([] as DiffFinding[]),
+      runVerify: vi.fn().mockImplementation(async (deps: { pages: RawPage[] }) => {
+        verifyReceivedPages = deps.pages
+        return [verifyFinding]
+      }),
+      writeReport: vi.fn().mockImplementation(async (rt: string, runId: string) => {
+        const report = makeReport(runId, [verifyFinding])
+        const paths = statePaths(rt)
+        await ensureDir(join(paths.reports, runId))
+        await writeFile(join(paths.reports, runId, 'report.json'), JSON.stringify(report), 'utf8')
+      }),
+      clock: () => 'run-four-cmd-001',
+      llm,
+    })
+
+    // rawPages must have been threaded into verify
+    expect(verifyReceivedPages).toHaveLength(1)
+    expect(verifyReceivedPages[0]?.url).toBe('https://example.com/')
+
+    // --- Step 4: runFeedback on the verify finding ---
+    await runFeedback(root, {
+      runId: 'run-four-cmd-001',
+      findingIndex: 0,
+      comment: 'CSRF token is present via meta tag — false positive.',
+      scenarioId: 'sc-four-cmd',
+      scenarioDir,
+    }, { llm })
+
+    // Feedback persisted
+    const feedbacks = await loadFeedback(root)
+    expect(feedbacks).toHaveLength(1)
+    expect(feedbacks[0]?.verdict).toBe('valid')
+    expect(feedbacks[0]?.appliedTo).toContain('sc-four-cmd')
+
+    // Known-state entry persisted
+    const known = await loadKnownFindings(root)
+    expect(known.length).toBeGreaterThan(0)
+    expect(known[0]?.fingerprint).toBeTruthy()
+    expect(known[0]?.reason).toContain('false positive')
+
+    // Scenario updated with false-positive annotation
+    const finalScenarios = await loadScenarios(scenarioDir)
+    const sc = finalScenarios.find((s) => s.id === 'sc-four-cmd')
+    expect(sc).toBeDefined()
+    const hasAnnotation = sc!.expectedResults.some(
+      (r) => r.description.includes('[known') || r.description.includes('false-positive'),
+    )
+    expect(hasAnnotation).toBe(true)
   })
 
   it('full loop: collect produces rawPages threaded into verify, report written, feedback updates scenario', async () => {
@@ -181,6 +341,9 @@ describe('integration: init → scenario → run → feedback', () => {
     // --- Assert: known-state entry persisted ---
     const known = await loadKnownFindings(root)
     expect(known.length).toBeGreaterThan(0)
+    // Durable: fingerprint must be non-empty
+    expect(known[0]?.fingerprint).toBeTruthy()
+    // Also verify content is as expected
     expect(known[0]?.reason).toContain('false positive')
 
     // --- Assert: scenario updated with false-positive annotation ---

@@ -3,7 +3,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Llm } from '../../services/llm/client.js'
-import type { Feedback } from '../../domain/types.js'
 import type { FeedbackDeps, FeedbackOpts } from './feedback.js'
 import { runFeedback } from './feedback.js'
 import { loadFeedback, loadKnownFindings } from '../../state/store.js'
@@ -11,7 +10,8 @@ import { saveScenario, loadScenarios } from '../../scenario/schema.js'
 import { statePaths } from '../../state/paths.js'
 import { writeYaml } from '../../util/fs.js'
 import type { Scenario } from '../../scenario/schema.js'
-import type { Report } from '../../domain/types.js'
+import type { Report, VerifyFinding, Feedback } from '../../domain/types.js'
+import * as feedbackVerifyModule from '../../services/llm/feedbackVerify.js'
 
 // --- helpers ---
 
@@ -25,14 +25,14 @@ function makeMockLlm(valid: boolean): Llm {
   } as unknown as Llm
 }
 
-function makeReport(runId: string): Report {
+function makeReport(runId: string, finding?: VerifyFinding): Report {
   return {
     runId,
     startedAt: '2024-01-01T00:00:00.000Z',
     target: 'staging',
     diffFindings: [],
     verifyFindings: [
-      {
+      finding ?? {
         category: 'security',
         severity: 'high',
         title: 'Missing CSRF protection',
@@ -43,6 +43,16 @@ function makeReport(runId: string): Report {
     verdicts: {},
     siteStructureRef: 'run-001',
     summary: 'Test summary',
+  }
+}
+
+function makeDbFinding(): VerifyFinding {
+  return {
+    category: 'registered-data',
+    severity: 'medium',
+    title: 'User record missing expected field',
+    detail: 'The users table is missing the preferred_name column.',
+    evidence: 'SELECT * FROM users WHERE id=1',
   }
 }
 
@@ -272,6 +282,105 @@ describe('feedback command', () => {
       const feedbacks = await loadFeedback(root)
       expect(feedbacks).toHaveLength(2)
       expect(feedbacks[0]?.id).not.toBe(feedbacks[1]?.id)
+    })
+  })
+
+  describe('Critical 1 — expectedDbState updated for registered-data findings', () => {
+    it('appends to expectedDbState (not expectedResults) when finding category is registered-data', async () => {
+      const dbFinding = makeDbFinding()
+      const deps: FeedbackDeps = {
+        llm: makeMockLlm(true),
+        loadReport: async () => makeReport('run-001', dbFinding),
+      }
+      const opts: FeedbackOpts = {
+        runId: 'run-001',
+        findingIndex: 0,
+        comment: 'The preferred_name column was renamed to display_name — not missing.',
+        scenarioId: 'sc-1',
+        scenarioDir,
+      }
+
+      await runFeedback(root, opts, deps)
+
+      const scenarios = await loadScenarios(scenarioDir)
+      const sc = scenarios.find((s) => s.id === 'sc-1')
+      expect(sc).toBeDefined()
+
+      // expectedDbState must have the new entry
+      expect(sc!.expectedDbState.length).toBeGreaterThan(0)
+      const dbEntry = sc!.expectedDbState.find(
+        (e) => typeof e.expectedValues['_note'] === 'string' &&
+          (e.expectedValues['_note'] as string).includes('[known false-positive]'),
+      )
+      expect(dbEntry).toBeDefined()
+      expect((dbEntry!.expectedValues['_note'] as string)).toContain(dbFinding.title)
+
+      // expectedResults must NOT have grown (DB finding goes to expectedDbState only)
+      const original = makeScenario('sc-1')
+      expect(sc!.expectedResults).toEqual(original.expectedResults)
+    })
+
+    it('does NOT touch expectedDbState for a non-DB (security) finding', async () => {
+      const deps: FeedbackDeps = {
+        llm: makeMockLlm(true),
+        loadReport: async () => makeReport('run-001'),
+      }
+      const opts: FeedbackOpts = {
+        runId: 'run-001',
+        findingIndex: 0,
+        comment: 'CSRF token is in meta tag — false positive.',
+        scenarioId: 'sc-1',
+        scenarioDir,
+      }
+
+      await runFeedback(root, opts, deps)
+
+      const scenarios = await loadScenarios(scenarioDir)
+      const sc = scenarios.find((s) => s.id === 'sc-1')
+      expect(sc).toBeDefined()
+
+      // expectedDbState must remain empty (non-DB finding goes to expectedResults)
+      expect(sc!.expectedDbState).toEqual([])
+
+      // expectedResults must have the new annotation
+      const hasNote = sc!.expectedResults.some((r) =>
+        r.description.includes('[known false-positive]'),
+      )
+      expect(hasNote).toBe(true)
+    })
+  })
+
+  describe('Important 2 — single feedback id (no dual randomUUID)', () => {
+    it('persisted feedback id matches the id passed to verifyFeedback', async () => {
+      let capturedFeedbackArg: Feedback | undefined
+
+      // Spy on verifyFeedback to capture the Feedback argument (which carries the id)
+      const originalVerify = feedbackVerifyModule.verifyFeedback
+      vi.spyOn(feedbackVerifyModule, 'verifyFeedback').mockImplementation(
+        async (llm, feedback, evidence) => {
+          capturedFeedbackArg = feedback
+          return originalVerify(llm, feedback, evidence)
+        },
+      )
+
+      const deps: FeedbackDeps = {
+        llm: makeMockLlm(true),
+        loadReport: async () => makeReport('run-001'),
+      }
+      const opts: FeedbackOpts = {
+        runId: 'run-001',
+        findingIndex: 0,
+        comment: 'Id traceability check.',
+        scenarioDir,
+      }
+
+      await runFeedback(root, opts, deps)
+
+      const feedbacks = await loadFeedback(root)
+      expect(feedbacks).toHaveLength(1)
+      expect(capturedFeedbackArg).toBeDefined()
+      // The id passed to verifyFeedback must be the same as the id in the persisted record
+      expect(feedbacks[0]?.id).toBe(capturedFeedbackArg!.id)
     })
   })
 })

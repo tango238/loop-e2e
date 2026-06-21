@@ -10,6 +10,10 @@ export async function readYaml<T>(path: string): Promise<T> {
   return parse(await readFile(path, 'utf8')) as T
 }
 
+export async function readJson<T>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, 'utf8')) as T
+}
+
 export async function writeYaml(path: string, data: unknown): Promise<void> {
   await ensureDir(dirname(path))
   await writeFile(path, stringify(data), 'utf8')

@@ -6,7 +6,7 @@ import { saveFeedback, saveKnownFinding } from '../../state/store.js'
 import { loadScenarios, saveScenario } from '../../scenario/schema.js'
 import { verifyFeedback } from '../../services/llm/feedbackVerify.js'
 import { statePaths } from '../../state/paths.js'
-import { readYaml } from '../../util/fs.js'
+import { readJson } from '../../util/fs.js'
 import type { Feedback, Report, VerifyFinding } from '../../domain/types.js'
 import type { Llm } from '../../services/llm/client.js'
 
@@ -33,7 +33,7 @@ async function defaultLoadReport(root: string, runId: string): Promise<Report | 
   const paths = statePaths(root)
   const file = join(paths.reports, runId, 'report.json')
   try {
-    return await readYaml<Report>(file)
+    return await readJson<Report>(file)
   } catch {
     return null
   }
@@ -47,8 +47,13 @@ async function defaultLoadReport(root: string, runId: string): Promise<Report | 
  *    valid correction or a misunderstanding.
  * 3. Apply (valid only):
  *    (a) Persist a known-finding entry so future diff/verify runs skip it.
- *    (b) Reflect the correction into the referenced Scenario's expectedResults.
+ *    (b) Reflect the correction into the referenced Scenario:
+ *        - registered-data / DB-related findings → append to expectedDbState
+ *        - all other categories → append to expectedResults
  * 4. Persist the feedback item (always, with verdict set).
+ *
+ * The feedback id is generated ONCE and reused for both the verifyFeedback call
+ * and the persisted item so they share the same traceable id.
  */
 export async function runFeedback(
   root: string,
@@ -60,7 +65,7 @@ export async function runFeedback(
 
   // --- 1. Intake: load report and resolve finding ---
   const report = await loadReport(root, runId)
-  const finding = resolvefinding(report, findingIndex)
+  const finding = resolveFinding(report, findingIndex)
   const findingId = finding
     ? `${runId}:verify:${findingIndex}`
     : undefined
@@ -68,6 +73,10 @@ export async function runFeedback(
   logger.info({ runId, findingId, scenarioId }, 'Processing feedback')
 
   // --- 2. Verify with Opus ---
+  // Generate the id ONCE so the transient Feedback passed to verifyFeedback and
+  // the persisted FeedbackItem share the same id (preserves traceability).
+  const feedbackId = randomUUID()
+
   const evidence = finding
     ? {
         findingTitle: finding.title,
@@ -81,7 +90,7 @@ export async function runFeedback(
       }
 
   const verifyResult = await verifyFeedback(llm, {
-    id: randomUUID(),
+    id: feedbackId,
     targetFindingId: findingId,
     userComment: comment,
     appliedTo: [],
@@ -104,20 +113,38 @@ export async function runFeedback(
       const scenarios = await loadScenarios(scenarioDir)
       const scenario = scenarios.find((s) => s.id === scenarioId)
       if (scenario) {
-        const updatedScenario = {
-          ...scenario,
-          expectedResults: [
-            ...scenario.expectedResults,
-            {
-              kind: 'ui' as const,
-              description: `[known false-positive] ${finding?.title ?? 'feedback'}: ${comment}`,
-              assertion: '[known] acknowledged by user feedback',
-            },
-          ],
-        }
+        const isDbFinding = finding?.category === 'registered-data'
+
+        const updatedScenario = isDbFinding
+          ? {
+              ...scenario,
+              expectedDbState: [
+                ...scenario.expectedDbState,
+                {
+                  connection: 'default',
+                  table: '[feedback-noted]',
+                  match: {},
+                  expectedValues: {
+                    _note: `[known false-positive] ${finding?.title ?? 'feedback'}: ${comment}`,
+                  },
+                },
+              ],
+            }
+          : {
+              ...scenario,
+              expectedResults: [
+                ...scenario.expectedResults,
+                {
+                  kind: 'ui' as const,
+                  description: `[known false-positive] ${finding?.title ?? 'feedback'}: ${comment}`,
+                  assertion: '[known] acknowledged by user feedback',
+                },
+              ],
+            }
+
         await saveScenario(scenarioDir, updatedScenario)
         appliedTo.push(scenarioId)
-        logger.info({ scenarioId }, 'Scenario updated with feedback correction')
+        logger.info({ scenarioId, isDbFinding }, 'Scenario updated with feedback correction')
       } else {
         logger.warn({ scenarioId }, 'Scenario not found — skipping scenario update')
       }
@@ -128,7 +155,7 @@ export async function runFeedback(
 
   // --- 4. Persist feedback (always) ---
   const feedbackItem: Feedback = {
-    id: randomUUID(),
+    id: feedbackId,
     targetFindingId: findingId,
     userComment: comment,
     verdict: verifyResult.valid ? 'valid' : 'invalid',
@@ -139,7 +166,7 @@ export async function runFeedback(
   logger.info({ feedbackId: feedbackItem.id, verdict: feedbackItem.verdict }, 'Feedback saved')
 }
 
-function resolvefinding(
+function resolveFinding(
   report: Report | null,
   index: number,
 ): VerifyFinding | null {
