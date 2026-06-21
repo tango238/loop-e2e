@@ -88,6 +88,11 @@ describe('hasCsrfProtection', () => {
     expect(hasCsrfProtection(html)).toBe(true)
   })
 
+  it('detects X-CSRF-Token header reference in script', () => {
+    const html = `<form>...</form><script>const headers = {"X-CSRF-Token": tok}</script>`
+    expect(hasCsrfProtection(html)).toBe(true)
+  })
+
   it('returns false when no CSRF pattern found', () => {
     const html = `<form><input name="email"><button>Submit</button></form>`
     expect(hasCsrfProtection(html)).toBe(false)
@@ -137,6 +142,13 @@ describe('verifySecurity', () => {
 
   it('does NOT flag missing CSRF when CSRF token present', async () => {
     const html = `<form><input name="_csrf" value="tok" type="hidden"><input type="text"></form>`
+    const result = await verifySecurity({ llm: makeLlm(), pages: [makePage(html)] })
+    const csrfFinding = result.find((f) => f.title.includes('CSRF'))
+    expect(csrfFinding).toBeUndefined()
+  })
+
+  it('does NOT flag missing CSRF when X-CSRF-Token header reference is present', async () => {
+    const html = `<form>...</form><script>const headers = {"X-CSRF-Token": tok}</script>`
     const result = await verifySecurity({ llm: makeLlm(), pages: [makePage(html)] })
     const csrfFinding = result.find((f) => f.title.includes('CSRF'))
     expect(csrfFinding).toBeUndefined()

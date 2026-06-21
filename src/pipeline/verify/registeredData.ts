@@ -1,9 +1,19 @@
 import { logger } from '../../util/logger.js'
+import { maskSecrets } from '../../util/mask.js'
 import type { VerifyFinding } from '../../domain/types.js'
 import type { Scenario } from '../../scenario/schema.js'
 import type { Config } from '../../config/schema.js'
 import type { DbAdapter } from '../../services/db/index.js'
 import { createDbAdapter, type DbDriverOptions } from '../../services/db/index.js'
+
+/**
+ * Validates that a SQL identifier (table name, column name) contains only
+ * safe characters: letters, digits, and underscores, starting with a letter or underscore.
+ * Rejects anything that could be used for SQL structural injection.
+ */
+export function isValidIdentifier(s: string): boolean {
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s)
+}
 
 export type RegisteredDataDeps = {
   scenarios: Scenario[]
@@ -91,6 +101,19 @@ export async function verifyRegisteredData(deps: RegisteredDataDeps): Promise<Ve
         continue
       }
 
+      // Guard against SQL structural injection via table and column identifiers.
+      if (!isValidIdentifier(table)) {
+        throw new Error(
+          `Invalid SQL identifier for table: "${table}" in scenario "${scenario.id}". Only [a-zA-Z_][a-zA-Z0-9_]* is allowed.`,
+        )
+      }
+      const invalidCol = Object.keys(match).find((col) => !isValidIdentifier(col))
+      if (invalidCol) {
+        throw new Error(
+          `Invalid SQL identifier for column: "${invalidCol}" in scenario "${scenario.id}". Only [a-zA-Z_][a-zA-Z0-9_]* is allowed.`,
+        )
+      }
+
       const dbConf = config.databases.find((d) => d.name === connection)!
       const { sql: whereClause, params } = buildWhereClause(match, dbConf.type)
       const sql = `SELECT * FROM ${table} WHERE ${whereClause} LIMIT 1`
@@ -123,7 +146,10 @@ export async function verifyRegisteredData(deps: RegisteredDataDeps): Promise<Ve
           })
         }
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
+        const rawMsg = error instanceof Error ? error.message : String(error)
+        const dbConf2 = config.databases.find((d) => d.name === connection)
+        const password = (dbConf2 ? (secrets[dbConf2.passwordEnv] ?? '') : '')
+        const msg = maskSecrets(rawMsg, [password])
         logger.warn({ error, scenario: scenario.id, table }, 'registeredData verify: query failed')
         findings.push({
           category: 'registered-data',

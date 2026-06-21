@@ -66,12 +66,15 @@ describe('runVerify', () => {
     expect(categories).toContain('layout')
   })
 
-  it('continues when one category throws', async () => {
-    // layout will throw; others should still run
+  it('continues when one category throws and other categories still contribute findings', async () => {
+    // layout will throw; error-handling and conditional should still run and return findings
     const llm: Llm = {
       complete: vi.fn()
-        .mockRejectedValueOnce(new Error('layout LLM error'))  // layout
-        .mockResolvedValue({ findings: [] }), // subsequent calls
+        .mockRejectedValueOnce(new Error('layout LLM error'))  // layout throws
+        .mockResolvedValueOnce({                               // conditional returns a finding
+          findings: [{ severity: 'medium', title: 'Conditional issue', detail: 'Detail', evidence: 'Ev' }],
+        })
+        .mockResolvedValue({ findings: [] }),                  // remaining calls (error-handling, etc.)
     } as unknown as Llm
 
     const pageWithError: RawPage = {
@@ -79,9 +82,14 @@ describe('runVerify', () => {
       html: '<div class="error">Fail</div>',
     }
 
-    // Should not throw
     const result = await runVerify(makeDeps({ llm, pages: [pageWithError] }))
+
+    // Must not throw
     expect(Array.isArray(result)).toBe(true)
+
+    // Other categories must have actually run and contributed findings
+    // (proves real per-category isolation, not just no-crash)
+    expect(result.some((f) => f.category !== 'layout')).toBe(true)
   })
 
   it('returns findings with correct categories', async () => {

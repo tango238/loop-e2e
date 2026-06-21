@@ -26,16 +26,11 @@ function buildConditionalPrompt(page: RawPage, scenarios: Scenario[]): string {
 
   const scenarioContext = scenarios
     .map((s) => {
-      const dbExpectations = s.expectedDbState
-        .map((db) => `  - connection:${db.connection} table:${db.table}`)
-        .join('\n')
       const resultExpectations = s.expectedResults.map((r) => `  - [${r.kind}] ${r.assertion}`).join('\n')
       return `Scenario "${s.title}" (${s.id}):
   Business flow: ${s.businessFlow}
   Expected results:
-${resultExpectations || '  (none)'}
-  Expected DB:
-${dbExpectations || '  (none)'}`
+${resultExpectations || '  (none)'}`
     })
     .join('\n\n')
 
