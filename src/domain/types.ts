@@ -126,7 +126,7 @@ export type DiffFinding = {
 }
 
 export type VerifyFinding = {
-  category: 'layout' | 'security' | 'conditional' | 'registered-data' | 'error-handling'
+  category: 'layout' | 'security' | 'conditional' | 'registered-data' | 'error-handling' | 'login'
   severity: 'high' | 'medium' | 'low'
   title: string
   detail: string

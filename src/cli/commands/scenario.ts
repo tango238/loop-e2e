@@ -5,9 +5,9 @@ import { generateScenarios } from '../../services/llm/scenarioGen.js'
 import { loadScenarios, saveScenario, type Scenario } from '../../scenario/schema.js'
 import { logger } from '../../util/logger.js'
 import type { Llm } from '../../services/llm/client.js'
-import type { GitRunner } from '../../services/repo/clone.js'
 import type { GitLogRunner } from '../../services/repo/gitlog.js'
 import type { RequirementContext } from '../../services/repo/reader.js'
+import type { AuthHint } from '../../services/llm/prompts/scenario.js'
 
 export type ScenarioOpts = {
   /** Additional requirement files to merge (--from flag) */
@@ -17,7 +17,6 @@ export type ScenarioOpts = {
 /** Injectable dependencies for scenario command — makes the command testable. */
 export type ScenarioDeps = {
   llm?: Llm
-  gitRunner?: GitRunner
   gitLogRunner?: GitLogRunner
   /** Injected for tests; defaults to stdin confirm */
   confirm?: (message: string) => Promise<boolean>
@@ -27,7 +26,7 @@ export type ScenarioDeps = {
     deps: Parameters<typeof collectRequirements>[1],
   ) => Promise<RequirementContext[]>
   /** Override generateScenarios for testing */
-  generateScenarios?: (llm: Llm, contexts: RequirementContext[]) => Promise<Scenario[]>
+  generateScenarios?: (llm: Llm, contexts: RequirementContext[], authHint?: AuthHint) => Promise<Scenario[]>
 }
 
 /**
@@ -57,11 +56,16 @@ export async function runScenario(
     root,
     ingestion: config.ingestion,
     fromPaths: opts.from,
-    gitRunner: deps.gitRunner,
     gitLogRunner: deps.gitLogRunner,
   })
 
-  const scenarios = await generate(llm, contexts)
+  // Build auth hint from the first configured target (structural info only — no cred values)
+  const firstTarget = config.targets[0]
+  const authHint: AuthHint | undefined = firstTarget?.auth?.loginPath
+    ? { loginPath: firstTarget.auth.loginPath }
+    : undefined
+
+  const scenarios = await generate(llm, contexts, authHint)
   logger.info({ count: scenarios.length }, 'Scenarios ready — saving')
 
   const existing = await loadScenarios(config.scenarioDir)

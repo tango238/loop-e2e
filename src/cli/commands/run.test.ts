@@ -211,4 +211,373 @@ describe('runRun', () => {
     const store = writeReportDeps['store'] as { saveBaseline: unknown }
     expect(store?.saveBaseline).toBe(realSaveBaseline)
   })
+
+  // --- Task 4.4: login scenario execution ---
+
+  it('executes login scenario when detected and includes result in verifyFindings', async () => {
+    const loginScenario = {
+      id: 'sc-001',
+      title: 'User login',
+      businessFlow: 'User logs in with credentials',
+      steps: [
+        { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
+        { action: 'fill', target: 'input[name=email]', input: 'user@example.com', expectedOutcome: 'Email filled' },
+        { action: 'fill', target: 'input[type=password]', input: 'placeholder', expectedOutcome: 'Password filled' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Submitted' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL is /dashboard' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn().mockResolvedValue({ ok: true, detail: 'Login succeeded — navigated to /dashboard', finalUrl: 'http://localhost:3000/dashboard' })
+    const fakePage = { goto: vi.fn(), url: vi.fn(() => 'http://localhost:3000/dashboard'), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn() }
+    const createPage = vi.fn().mockResolvedValue(fakePage)
+
+    let capturedVerifyFindings: VerifyFinding[] = []
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
+        capturedVerifyFindings = d.verifyFindings
+      }),
+      clock: () => 'run-login-4.4',
+      scenarios: [loginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-login-4.4',
+        config: {
+          repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend' as const, audience: 'user' as const }],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'testuser@example.com', PASSWORD: 'secret-pass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(executeLogin).toHaveBeenCalledOnce()
+    expect(capturedVerifyFindings.some((f) => f.category === 'login')).toBe(true)
+    const loginFinding = capturedVerifyFindings.find((f) => f.category === 'login')!
+    expect(loginFinding.severity).toBe('low')  // success = low severity
+    expect(loginFinding.detail).not.toContain('secret-pass')
+  })
+
+  it('records login finding as high severity when login fails', async () => {
+    const loginScenario = {
+      id: 'sc-001',
+      title: 'Login scenario',
+      businessFlow: 'User logs in',
+      steps: [
+        { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Submitted' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL changes' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn().mockResolvedValue({ ok: false, detail: 'Login failed: still on /login', finalUrl: 'http://localhost:3000/login' })
+    const fakePage = { goto: vi.fn(), url: vi.fn(), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn() }
+    const createPage = vi.fn().mockResolvedValue(fakePage)
+
+    let capturedVerifyFindings: VerifyFinding[] = []
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
+        capturedVerifyFindings = d.verifyFindings
+      }),
+      clock: () => 'run-login-fail',
+      scenarios: [loginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-login-fail',
+        config: {
+          repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend' as const, audience: 'user' as const }],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'testuser', PASSWORD: 'wrongpass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    const loginFinding = capturedVerifyFindings.find((f) => f.category === 'login')!
+    expect(loginFinding).toBeDefined()
+    expect(loginFinding.severity).toBe('high')
+    expect(loginFinding.detail).not.toContain('wrongpass')
+  })
+
+  it('skips login execution when no login scenario is present', async () => {
+    const nonLoginScenario = {
+      id: 'sc-002',
+      title: 'View product list',
+      businessFlow: 'User browses products',
+      steps: [
+        { action: 'navigate', target: '/products', expectedOutcome: 'Products shown' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Products visible', assertion: 'List not empty' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn()
+    const createPage = vi.fn()
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-no-login',
+      scenarios: [nonLoginScenario],
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(executeLogin).not.toHaveBeenCalled()
+    expect(createPage).not.toHaveBeenCalled()
+  })
+
+  // --- isLoginScenario tightening: endsWith false-positive fix (M4 review finding 4.4) ---
+
+  it('does NOT mis-detect a scenario with only /admin-login path as login scenario for loginPath=/login', async () => {
+    // Scenario whose only navigated path is /admin-login — must NOT match loginPath '/login'
+    const adminLoginScenario = {
+      id: 'sc-admin',
+      title: 'Admin panel access',
+      businessFlow: 'Admin accesses admin panel',
+      steps: [
+        { action: 'navigate', target: '/admin-login', expectedOutcome: 'Admin login page shown' },
+        { action: 'fill', target: 'input[name=email]', input: 'admin@example.com', expectedOutcome: 'Email filled' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Admin logged in' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Admin dashboard', assertion: 'URL is /admin' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn()
+    const createPage = vi.fn()
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-admin-login-no-match',
+      scenarios: [adminLoginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-admin-login-no-match',
+        config: {
+          repositories: [],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'admin', PASSWORD: 'adminpass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    // /admin-login must NOT match loginPath='/login' — executeLogin should NOT be called
+    expect(executeLogin).not.toHaveBeenCalled()
+    expect(createPage).not.toHaveBeenCalled()
+  })
+
+  // --- Important 2: page.close() is always called after login execution ---
+
+  const makeLoginCtx = () => ({
+    root: '/tmp/root',
+    runId: 'run-close-test',
+    config: {
+      repositories: [],
+      targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+      databases: [],
+      schedule: { intervalMinutes: 60 },
+      scenarioDir: 'scenarios',
+      github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+      baseline: { commit: false },
+      models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+      ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+      refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+    },
+    secrets: {
+      db: {},
+      targetAuth: { USERNAME: 'user@example.com', PASSWORD: 'pass' },
+      anthropicApiKey: '',
+      githubToken: '',
+    },
+  })
+
+  const makeLoginScenarioWithStep = () => ({
+    id: 'sc-login-close',
+    title: 'Login flow',
+    businessFlow: 'User logs in',
+    steps: [
+      { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
+      { action: 'fill', target: 'input[name=email]', input: 'user@example.com', expectedOutcome: 'Email filled' },
+      { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Submitted' },
+    ],
+    expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL is /dashboard' }],
+    expectedDbState: [],
+  })
+
+  it('closes the page after a successful login run', async () => {
+    const closeSpy = vi.fn().mockResolvedValue(undefined)
+    const fakePage = {
+      goto: vi.fn(), url: vi.fn(() => 'http://localhost:3000/dashboard'), title: vi.fn(),
+      content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(),
+      locator: vi.fn(), close: closeSpy,
+    }
+    const createPage = vi.fn().mockResolvedValue(fakePage)
+    const executeLogin = vi.fn().mockResolvedValue({ ok: true, detail: 'Login succeeded', finalUrl: 'http://localhost:3000/dashboard' })
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-close-success',
+      scenarios: [makeLoginScenarioWithStep()],
+      ctx: makeLoginCtx(),
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(closeSpy).toHaveBeenCalledOnce()
+  })
+
+  it('closes the page even when executeLogin throws', async () => {
+    const closeSpy = vi.fn().mockResolvedValue(undefined)
+    const fakePage = {
+      goto: vi.fn(), url: vi.fn(), title: vi.fn(),
+      content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(),
+      locator: vi.fn(), close: closeSpy,
+    }
+    const createPage = vi.fn().mockResolvedValue(fakePage)
+    const executeLogin = vi.fn().mockRejectedValue(new Error('network failure'))
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-close-throw',
+      scenarios: [makeLoginScenarioWithStep()],
+      ctx: makeLoginCtx(),
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(closeSpy).toHaveBeenCalledOnce()
+  })
+
+  // --- Minor: "Logout redirects to login" must NOT be selected as login scenario ---
+
+  it('does NOT select "Logout redirects to login" as a login scenario', async () => {
+    const logoutScenario = {
+      id: 'sc-logout',
+      title: 'Logout redirects to login',
+      businessFlow: 'User logs out and is redirected to login page',
+      steps: [
+        { action: 'navigate', target: '/dashboard', expectedOutcome: 'Dashboard shown' },
+        { action: 'click', target: 'button#logout', expectedOutcome: 'Logged out' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Login page', assertion: 'URL contains /login' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn()
+    const createPage = vi.fn()
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-logout-not-login',
+      scenarios: [logoutScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-logout-not-login',
+        config: {
+          repositories: [],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'user', PASSWORD: 'pass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    // Title mentions "login" but no fill/submit step targets /login — must NOT be selected
+    expect(executeLogin).not.toHaveBeenCalled()
+    expect(createPage).not.toHaveBeenCalled()
+  })
 })
