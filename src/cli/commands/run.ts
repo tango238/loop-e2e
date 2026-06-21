@@ -7,9 +7,11 @@ import type { Scenario } from '../../scenario/schema.js'
 import type { DbDriverOptions } from '../../services/db/index.js'
 import type { PageLike } from '../../services/browser/crawler.js'
 import type { LoginResult } from '../../services/browser/login.js'
+import type { prepare } from '../../pipeline/prepare.js'
 
 export type RunOpts = {
   target?: string
+  skipPrepare?: boolean
 }
 
 type CollectFn = (ctx: RunContext, deps: object) => Promise<CollectResult>
@@ -38,6 +40,8 @@ export type RunDeps = {
   detectDiffs: DetectDiffsFn
   runVerify: RunVerifyFn
   writeReport: WriteReportFn
+  /** Injectable prepare phase — production passes real prepare; tests inject a mock */
+  prepare?: typeof prepare
   /** Injected for deterministic runId in tests; defaults to ISO timestamp */
   clock?: () => string
   /** Injected RunContext for tests; if omitted, loaded from config */
@@ -197,11 +201,13 @@ function resolveCredentials(
 }
 
 /**
- * Orchestrates the run pipeline: collect → diff → verify → report.
+ * Orchestrates the run pipeline: prepare → collect → diff → verify → report.
  * Each stage is wrapped in try/catch so partial failures still produce a report.
+ * The prepare stage (repo refresh + setup hooks) runs before collect unless
+ * opts.skipPrepare is true. Prepare failures abort the run (propagate).
  * All external dependencies are injectable for deterministic testing.
  */
-export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promise<void> {
+export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promise<void> {
   const { collect, detectDiffs, runVerify, writeReport, clock, ctx: injectedCtx, llm } = deps
   const runId = clock ? clock() : new Date().toISOString().replace(/[:.]/g, '-')
 
@@ -232,6 +238,20 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
 
   // Update runId in ctx
   const runCtx: RunContext = { ...ctx, root, runId }
+
+  // Stage 0: prepare (repo refresh + setup hooks) — runs before collect unless skipped.
+  // Failures propagate and abort the run; they are not swallowed.
+  if (!opts.skipPrepare && deps.prepare) {
+    const allSecrets: string[] = [
+      runCtx.secrets.anthropicApiKey,
+      runCtx.secrets.githubToken,
+      ...Object.values(runCtx.secrets.db),
+      ...Object.values(runCtx.secrets.targetAuth),
+    ].filter(Boolean) as string[]
+    logger.info({ root }, 'prepare phase starting')
+    await deps.prepare(runCtx.config, root, { secrets: allSecrets })
+    logger.info({ root }, 'prepare phase complete')
+  }
 
   // Stage 1: collect
   let structure: SiteStructure = makeEmptyStructure()

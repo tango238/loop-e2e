@@ -523,6 +523,117 @@ describe('runRun', () => {
     expect(closeSpy).toHaveBeenCalledOnce()
   })
 
+  // --- Task 5: prepare phase wiring ---
+
+  it('calls prepare before collect when skipPrepare is false (default)', async () => {
+    const order: string[] = []
+
+    const deps = {
+      prepare: vi.fn().mockImplementation(async () => { order.push('prepare') }),
+      collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
+      detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
+      runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
+      writeReport: vi.fn().mockImplementation(async () => { order.push('report') }),
+      clock: () => 'run-prepare-order',
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(order).toEqual(['prepare', 'collect', 'diff', 'verify', 'report'])
+    expect(deps.prepare).toHaveBeenCalledOnce()
+    // Collect must not have been called when prepare ran
+    const prepareCallOrder = order.indexOf('prepare')
+    const collectCallOrder = order.indexOf('collect')
+    expect(prepareCallOrder).toBeLessThan(collectCallOrder)
+  })
+
+  it('does NOT call prepare when skipPrepare is true, but rest of run still proceeds', async () => {
+    const order: string[] = []
+
+    const deps = {
+      prepare: vi.fn().mockImplementation(async () => { order.push('prepare') }),
+      collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
+      detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
+      runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
+      writeReport: vi.fn().mockImplementation(async () => { order.push('report') }),
+      clock: () => 'run-skip-prepare',
+    }
+
+    await runRun('/tmp/root', { skipPrepare: true }, deps)
+
+    expect(deps.prepare).not.toHaveBeenCalled()
+    expect(order).toEqual(['collect', 'diff', 'verify', 'report'])
+    expect(deps.collect).toHaveBeenCalledOnce()
+    expect(deps.writeReport).toHaveBeenCalledOnce()
+  })
+
+  it('calls prepare with the loaded config, root, and secrets array', async () => {
+    const ctx = {
+      root: '/tmp/root',
+      runId: 'run-prepare-args',
+      config: {
+        repositories: [],
+        targets: [{ name: 'local', baseUrl: 'http://localhost:3000' }],
+        databases: [],
+        schedule: { intervalMinutes: 60 },
+        scenarioDir: 'scenarios',
+        github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+        baseline: { commit: false },
+        models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+        ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+        refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+      },
+      secrets: {
+        db: { DB_PASS: 'db-secret' },
+        targetAuth: { APP_TOKEN: 'auth-token' },
+        anthropicApiKey: 'anthropic-key',
+        githubToken: 'gh-token',
+      },
+    }
+
+    let capturedConfig: unknown = 'not-set'
+    let capturedRoot: unknown = 'not-set'
+    let capturedSecrets: unknown = 'not-set'
+
+    const deps = {
+      prepare: vi.fn().mockImplementation(async (config: unknown, root: unknown, prepareDeps: { secrets?: unknown }) => {
+        capturedConfig = config
+        capturedRoot = root
+        capturedSecrets = prepareDeps.secrets
+      }),
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-prepare-args',
+      ctx,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(capturedConfig).toBe(ctx.config)
+    expect(capturedRoot).toBe('/tmp/root')
+    const secrets = capturedSecrets as string[]
+    expect(secrets).toContain('anthropic-key')
+    expect(secrets).toContain('gh-token')
+    expect(secrets).toContain('db-secret')
+    expect(secrets).toContain('auth-token')
+  })
+
+  it('propagates prepare failure and aborts the run (does not swallow)', async () => {
+    const deps = {
+      prepare: vi.fn().mockRejectedValue(new Error('git fetch failed')),
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-prepare-fail',
+    }
+
+    await expect(runRun('/tmp/root', {}, deps)).rejects.toThrow('git fetch failed')
+    expect(deps.collect).not.toHaveBeenCalled()
+  })
+
   // --- Minor: "Logout redirects to login" must NOT be selected as login scenario ---
 
   it('does NOT select "Logout redirects to login" as a login scenario', async () => {

@@ -98,7 +98,8 @@ program
   .command('run')
   .description('Run E2E loop: collect → diff → report')
   .option('--target <name>', 'Target name to run against')
-  .action(async (opts: { target?: string }) => {
+  .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
+  .action(async (opts: { target?: string; skipPrepare?: boolean }) => {
     const cwd = process.cwd()
 
     let config: import('../config/schema.js').Config
@@ -139,6 +140,7 @@ program
     const { detectDiffs } = await import('../pipeline/diff.js')
     const { runVerify } = await import('../pipeline/verify/index.js')
     const { writeReport } = await import('../pipeline/report.js')
+    const { prepare } = await import('../pipeline/prepare.js')
     const { adjudicate } = await import('../services/llm/refute.js')
     const { upsertIssue } = await import('../services/github/issues.js')
     const { parseRepoUrl } = await import('../services/github/labels.js')
@@ -160,7 +162,8 @@ program
     try {
       browserCtx = await launchBrowser()
       const launchedBrowser = browserCtx.browser
-      await runRun(cwd, opts, {
+      await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare }, {
+        prepare,
         collect: (ctx, _deps) => collect(ctx, {
           store: storeModule,
           crawl,
