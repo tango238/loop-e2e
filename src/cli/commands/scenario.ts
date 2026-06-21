@@ -7,6 +7,7 @@ import { logger } from '../../util/logger.js'
 import type { Llm } from '../../services/llm/client.js'
 import type { GitLogRunner } from '../../services/repo/gitlog.js'
 import type { RequirementContext } from '../../services/repo/reader.js'
+import type { AuthHint } from '../../services/llm/prompts/scenario.js'
 
 export type ScenarioOpts = {
   /** Additional requirement files to merge (--from flag) */
@@ -25,7 +26,7 @@ export type ScenarioDeps = {
     deps: Parameters<typeof collectRequirements>[1],
   ) => Promise<RequirementContext[]>
   /** Override generateScenarios for testing */
-  generateScenarios?: (llm: Llm, contexts: RequirementContext[]) => Promise<Scenario[]>
+  generateScenarios?: (llm: Llm, contexts: RequirementContext[], authHint?: AuthHint) => Promise<Scenario[]>
 }
 
 /**
@@ -58,7 +59,13 @@ export async function runScenario(
     gitLogRunner: deps.gitLogRunner,
   })
 
-  const scenarios = await generate(llm, contexts)
+  // Build auth hint from the first configured target (structural info only — no cred values)
+  const firstTarget = config.targets[0]
+  const authHint: AuthHint | undefined = firstTarget?.auth?.loginPath
+    ? { loginPath: firstTarget.auth.loginPath }
+    : undefined
+
+  const scenarios = await generate(llm, contexts, authHint)
   logger.info({ count: scenarios.length }, 'Scenarios ready — saving')
 
   const existing = await loadScenarios(config.scenarioDir)
