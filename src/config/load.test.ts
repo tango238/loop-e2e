@@ -9,7 +9,10 @@ import type { Config } from './schema.js'
 // A valid config fixture matching ConfigSchema requirements
 const valid: Config = {
   repositories: [{ name: 'web', label: 'frontend-user', url: 'https://github.com/o/web', role: 'frontend', audience: 'user' }],
-  targets: [{ name: 'staging', baseUrl: 'https://staging.example.com', auth: { strategy: 'none' } }],
+  targets: [
+    { name: 'staging', baseUrl: 'https://staging.example.com', auth: { strategy: 'none' } },
+    { name: 'prod', baseUrl: 'https://prod.example.com', auth: { strategy: 'form', loginPath: '/login', usernameEnv: 'PROD_USER', passwordEnv: 'PROD_PASSWORD' } },
+  ],
   databases: [{ name: 'main', type: 'postgres', host: 'localhost', port: 5432, database: 'app', user: 'app', passwordEnv: 'DB_MAIN_PASSWORD' }],
   schedule: { intervalMinutes: 60 },
   scenarioDir: 'scenarios',
@@ -41,11 +44,12 @@ describe('loadConfig', () => {
 
   it('round-trips config and resolves secrets', async () => {
     await saveConfig(dir, valid)
-    await writeFile(join(dir, '.env'), 'DB_MAIN_PASSWORD=secret\nANTHROPIC_API_KEY=ant-key\nGITHUB_TOKEN=gh-token\n')
+    await writeFile(join(dir, '.env'), 'DB_MAIN_PASSWORD=secret\nANTHROPIC_API_KEY=ant-key\nGITHUB_TOKEN=gh-token\nPROD_PASSWORD=prodpass\n')
 
     const { config, secrets } = await loadConfig(dir)
     expect(config.scenarioDir).toBe('scenarios')
     expect(secrets.db['DB_MAIN_PASSWORD']).toBe('secret')
+    expect(secrets.targetAuth['PROD_PASSWORD']).toBe('prodpass')
     expect(secrets.anthropicApiKey).toBe('ant-key')
     expect(secrets.githubToken).toBe('gh-token')
   })
@@ -53,10 +57,58 @@ describe('loadConfig', () => {
   it('throws a clear error when a required env var is missing (no secret value in message)', async () => {
     await saveConfig(dir, valid)
     // Write .env without DB_MAIN_PASSWORD
-    await writeFile(join(dir, '.env'), 'ANTHROPIC_API_KEY=ant-key\nGITHUB_TOKEN=gh-token\n')
+    await writeFile(join(dir, '.env'), 'ANTHROPIC_API_KEY=ant-key\nGITHUB_TOKEN=gh-token\nPROD_PASSWORD=prodpass\n')
     // Ensure the DB env var is not in process.env
     delete process.env['DB_MAIN_PASSWORD']
 
     await expect(loadConfig(dir)).rejects.toThrow('DB_MAIN_PASSWORD')
+  })
+
+  it('resolves target auth secrets into secrets.targetAuth', async () => {
+    await saveConfig(dir, valid)
+    await writeFile(
+      join(dir, '.env'),
+      'DB_MAIN_PASSWORD=secret\nANTHROPIC_API_KEY=ant-key\nGITHUB_TOKEN=gh-token\nPROD_PASSWORD=prodpass\n',
+    )
+
+    const { secrets } = await loadConfig(dir)
+    expect(secrets.targetAuth['PROD_PASSWORD']).toBe('prodpass')
+  })
+
+  it('error message never contains a secret value (secret-leak regression guard)', async () => {
+    await saveConfig(dir, valid)
+    // DB_MAIN_PASSWORD is set but DB_MAIN_PASSWORD env for the DB is missing — trigger error via missing ANTHROPIC_API_KEY
+    await writeFile(
+      join(dir, '.env'),
+      'DB_MAIN_PASSWORD=supersecret\nGITHUB_TOKEN=gh-token\nPROD_PASSWORD=prodpass\n',
+    )
+    delete process.env['ANTHROPIC_API_KEY']
+
+    let err: Error | undefined
+    try {
+      await loadConfig(dir)
+    } catch (e) {
+      err = e as Error
+    }
+    expect(err).toBeDefined()
+    expect(err!.message).toContain('ANTHROPIC_API_KEY')
+    expect(err!.message).not.toContain('supersecret')
+    expect(err!.message).not.toContain('prodpass')
+  })
+
+  it('throws listing ANTHROPIC_API_KEY when it is missing', async () => {
+    await saveConfig(dir, valid)
+    await writeFile(join(dir, '.env'), 'DB_MAIN_PASSWORD=secret\nGITHUB_TOKEN=gh-token\nPROD_PASSWORD=prodpass\n')
+    delete process.env['ANTHROPIC_API_KEY']
+
+    await expect(loadConfig(dir)).rejects.toThrow('ANTHROPIC_API_KEY')
+  })
+
+  it('throws listing GITHUB_TOKEN when it is missing', async () => {
+    await saveConfig(dir, valid)
+    await writeFile(join(dir, '.env'), 'DB_MAIN_PASSWORD=secret\nANTHROPIC_API_KEY=ant-key\nPROD_PASSWORD=prodpass\n')
+    delete process.env['GITHUB_TOKEN']
+
+    await expect(loadConfig(dir)).rejects.toThrow('GITHUB_TOKEN')
   })
 })

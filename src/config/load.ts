@@ -27,13 +27,17 @@ export async function loadConfig(root: string): Promise<{ config: Config; secret
     }
   }
 
-  // Also collect auth passwordEnv references from targets
+  // Resolve target auth secrets (passwordEnv per target)
+  const targetAuthSecrets: Record<string, string> = {}
+
   for (const target of config.targets) {
     if (target.auth?.passwordEnv) {
       const envName = target.auth.passwordEnv
       const value = process.env[envName]
       if (!value) {
         missing.push(envName)
+      } else {
+        targetAuthSecrets[envName] = value
       }
     }
   }
@@ -51,6 +55,7 @@ export async function loadConfig(root: string): Promise<{ config: Config; secret
 
   const secrets: Secrets = {
     db: dbSecrets,
+    targetAuth: targetAuthSecrets,
     anthropicApiKey: anthropicApiKey as string,
     githubToken: githubToken as string,
   }
