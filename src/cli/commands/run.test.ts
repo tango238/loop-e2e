@@ -211,4 +211,163 @@ describe('runRun', () => {
     const store = writeReportDeps['store'] as { saveBaseline: unknown }
     expect(store?.saveBaseline).toBe(realSaveBaseline)
   })
+
+  // --- Task 4.4: login scenario execution ---
+
+  it('executes login scenario when detected and includes result in verifyFindings', async () => {
+    const loginScenario = {
+      id: 'sc-001',
+      title: 'User login',
+      businessFlow: 'User logs in with credentials',
+      steps: [
+        { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
+        { action: 'fill', target: 'input[name=email]', input: 'user@example.com', expectedOutcome: 'Email filled' },
+        { action: 'fill', target: 'input[type=password]', input: 'placeholder', expectedOutcome: 'Password filled' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Submitted' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL is /dashboard' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn().mockResolvedValue({ ok: true, detail: 'Login succeeded — navigated to /dashboard', finalUrl: 'http://localhost:3000/dashboard' })
+    const fakePage = { goto: vi.fn(), url: vi.fn(() => 'http://localhost:3000/dashboard'), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn() }
+    const createPage = vi.fn().mockResolvedValue(fakePage)
+
+    let capturedVerifyFindings: VerifyFinding[] = []
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
+        capturedVerifyFindings = d.verifyFindings
+      }),
+      clock: () => 'run-login-4.4',
+      scenarios: [loginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-login-4.4',
+        config: {
+          repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend' as const, audience: 'user' as const }],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'testuser@example.com', PASSWORD: 'secret-pass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(executeLogin).toHaveBeenCalledOnce()
+    expect(capturedVerifyFindings.some((f) => f.category === 'login')).toBe(true)
+    const loginFinding = capturedVerifyFindings.find((f) => f.category === 'login')!
+    expect(loginFinding.severity).toBe('low')  // success = low severity
+    expect(loginFinding.detail).not.toContain('secret-pass')
+  })
+
+  it('records login finding as high severity when login fails', async () => {
+    const loginScenario = {
+      id: 'sc-001',
+      title: 'Login scenario',
+      businessFlow: 'User logs in',
+      steps: [
+        { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Submitted' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL changes' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn().mockResolvedValue({ ok: false, detail: 'Login failed: still on /login', finalUrl: 'http://localhost:3000/login' })
+    const fakePage = { goto: vi.fn(), url: vi.fn(), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn() }
+    const createPage = vi.fn().mockResolvedValue(fakePage)
+
+    let capturedVerifyFindings: VerifyFinding[] = []
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
+        capturedVerifyFindings = d.verifyFindings
+      }),
+      clock: () => 'run-login-fail',
+      scenarios: [loginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-login-fail',
+        config: {
+          repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend' as const, audience: 'user' as const }],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'testuser', PASSWORD: 'wrongpass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    const loginFinding = capturedVerifyFindings.find((f) => f.category === 'login')!
+    expect(loginFinding).toBeDefined()
+    expect(loginFinding.severity).toBe('high')
+    expect(loginFinding.detail).not.toContain('wrongpass')
+  })
+
+  it('skips login execution when no login scenario is present', async () => {
+    const nonLoginScenario = {
+      id: 'sc-002',
+      title: 'View product list',
+      businessFlow: 'User browses products',
+      steps: [
+        { action: 'navigate', target: '/products', expectedOutcome: 'Products shown' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Products visible', assertion: 'List not empty' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn()
+    const createPage = vi.fn()
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-no-login',
+      scenarios: [nonLoginScenario],
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    expect(executeLogin).not.toHaveBeenCalled()
+    expect(createPage).not.toHaveBeenCalled()
+  })
 })

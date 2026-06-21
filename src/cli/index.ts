@@ -139,6 +139,7 @@ program
     const { adjudicate } = await import('../services/llm/refute.js')
     const { upsertIssue } = await import('../services/github/issues.js')
     const { parseRepoUrl } = await import('../services/github/labels.js')
+    const { executeLoginScenario } = await import('../services/browser/login.js')
     const storeModule = await import('../state/store.js')
 
     const githubClient = secrets.githubToken ? createGithubClient(secrets.githubToken) : null
@@ -174,6 +175,8 @@ program
         store: { saveBaseline: (root, structure) => storeModule.saveBaseline(root, structure) },
         githubClient,
         repo,
+        executeLogin: executeLoginScenario,
+        createPage: () => browserCtx!.browser.newPage(),
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

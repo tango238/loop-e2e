@@ -1,10 +1,12 @@
 import { logger } from '../../util/logger.js'
-import type { RunContext, DiffFinding, VerifyFinding, SiteStructure, PriorState, RawPage } from '../../domain/types.js'
+import type { RunContext, DiffFinding, VerifyFinding, SiteStructure, PriorState, RawPage, TargetEnv } from '../../domain/types.js'
 import type { CollectResult } from '../../pipeline/collect.js'
 import type { WriteReportDeps } from '../../pipeline/report.js'
 import type { RunVerifyDeps } from '../../pipeline/verify/index.js'
 import type { Scenario } from '../../scenario/schema.js'
 import type { DbDriverOptions } from '../../services/db/index.js'
+import type { PageLike } from '../../services/browser/crawler.js'
+import type { LoginResult } from '../../services/browser/login.js'
 
 export type RunOpts = {
   target?: string
@@ -19,6 +21,17 @@ type DetectDiffsFn = (deps: {
 }) => Promise<DiffFinding[]>
 type RunVerifyFn = (deps: RunVerifyDeps) => Promise<VerifyFinding[]>
 type WriteReportFn = (root: string, runId: string, deps: WriteReportDeps) => Promise<void>
+
+/** Injectable login executor for testing */
+type ExecuteLoginFn = (
+  page: PageLike,
+  target: TargetEnv,
+  scenario: Scenario,
+  creds: { username: string; password: string },
+) => Promise<LoginResult>
+
+/** Injectable page factory — returns a PageLike from a browser */
+type CreatePageFn = () => Promise<PageLike>
 
 export type RunDeps = {
   collect: CollectFn
@@ -47,6 +60,10 @@ export type RunDeps = {
   githubClient?: import('../../services/github/client.js').GithubClient | null
   /** GitHub repo ref — null means no issue filing */
   repo?: import('../../services/github/labels.js').RepoRef | null
+  /** Injectable login executor — production passes executeLoginScenario */
+  executeLogin?: ExecuteLoginFn
+  /** Injectable page factory — production passes browser.newPage */
+  createPage?: CreatePageFn
 }
 
 function makeEmptyStructure(): SiteStructure {
@@ -57,10 +74,110 @@ function makeEmptyStructure(): SiteStructure {
   }
 }
 
+/**
+ * Run the login scenario if one is detected in `scenarios`.
+ * Returns zero or one VerifyFinding with category 'login'.
+ * Never throws — login failures become findings, not exceptions.
+ */
+async function runLoginIfDetected(
+  ctx: RunContext,
+  deps: RunDeps,
+  scenarios: Scenario[],
+): Promise<VerifyFinding[]> {
+  if (!deps.executeLogin || !deps.createPage) return []
+
+  const configTarget = ctx.config.targets[0]
+  if (!configTarget?.auth || configTarget.auth.strategy === 'none') return []
+
+  const loginPath = configTarget.auth.loginPath ?? '/login'
+  const loginScenario = scenarios.find((s) => isLoginScenario(s, loginPath))
+  if (!loginScenario) {
+    logger.debug('No login scenario detected — skipping login execution')
+    return []
+  }
+
+  const creds = resolveCredentials(ctx.secrets, configTarget.auth)
+  if (!creds) {
+    logger.warn({ loginPath }, 'Login scenario detected but credentials not configured — skipping')
+    return []
+  }
+
+  const target: TargetEnv = {
+    name: configTarget.name,
+    baseUrl: configTarget.baseUrl,
+    auth: {
+      strategy: configTarget.auth.strategy,
+      loginPath: configTarget.auth.loginPath,
+    },
+  }
+
+  let page: PageLike
+  try {
+    page = await deps.createPage()
+  } catch (err) {
+    logger.error({ err }, 'Failed to create page for login — skipping')
+    return []
+  }
+
+  try {
+    const result = await deps.executeLogin(page, target, loginScenario, creds)
+    logger.info({ ok: result.ok, finalUrl: result.finalUrl }, 'Login execution complete')
+
+    const finding: VerifyFinding = {
+      category: 'login',
+      severity: result.ok ? 'low' : 'high',
+      title: result.ok ? 'Login succeeded' : 'Login failed',
+      detail: result.detail,
+      evidence: `finalUrl: ${result.finalUrl}`,
+    }
+    return [finding]
+  } catch (err) {
+    logger.error({ err }, 'Login execution threw unexpectedly')
+    const finding: VerifyFinding = {
+      category: 'login',
+      severity: 'high',
+      title: 'Login execution error',
+      detail: `Unexpected error during login: ${err instanceof Error ? err.message : String(err)}`,
+      evidence: '',
+    }
+    return [finding]
+  }
+}
+
 const emptyPrior: PriorState = {
   baseline: null,
   latestReport: null,
   feedback: [],
+}
+
+/**
+ * Returns true if the scenario looks like a login scenario.
+ * Heuristic: title or businessFlow contains 'login', OR any step navigates to the loginPath.
+ */
+function isLoginScenario(scenario: Scenario, loginPath?: string): boolean {
+  const text = `${scenario.title} ${scenario.businessFlow}`.toLowerCase()
+  if (text.includes('login') || text.includes('sign in') || text.includes('signin')) {
+    return true
+  }
+  if (loginPath) {
+    return scenario.steps.some(
+      (s) => s.target === loginPath || s.target.endsWith(loginPath),
+    )
+  }
+  return false
+}
+
+/**
+ * Resolve credentials from secrets using the target's auth env var names.
+ */
+function resolveCredentials(
+  secrets: RunContext['secrets'],
+  auth: NonNullable<import('../../config/schema.js').Config['targets'][number]['auth']>,
+): { username: string; password: string } | null {
+  const username = auth.usernameEnv ? secrets.targetAuth[auth.usernameEnv] : undefined
+  const password = auth.passwordEnv ? secrets.targetAuth[auth.passwordEnv] : undefined
+  if (!username || !password) return null
+  return { username, password }
 }
 
 /**
@@ -141,6 +258,10 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
   } catch (error) {
     logger.error({ error, runId }, 'verify stage failed — continuing with empty findings')
   }
+
+  // Stage 3b: login scenario execution (optional — only when a login scenario is detected)
+  const loginFindings = await runLoginIfDetected(runCtx, deps, deps.scenarios ?? [])
+  verifyFindings = [...verifyFindings, ...loginFindings]
 
   // Stage 4: report (always runs)
   // Use injected deps for adjudicate/upsertIssue/store; fall back to no-ops only in tests
