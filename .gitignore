@@ -4,3 +4,5 @@ node_modules/
 dist/
 .superpowers/
 coverage/
+.playwright-mcp/
+/*.png

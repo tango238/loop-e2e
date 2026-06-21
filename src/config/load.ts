@@ -27,12 +27,13 @@ export async function loadConfig(root: string): Promise<{ config: Config; secret
     }
   }
 
-  // Resolve target auth secrets (passwordEnv per target)
+  // Resolve target auth secrets (usernameEnv + passwordEnv per target).
+  // Both are required when referenced by a target's auth config.
   const targetAuthSecrets: Record<string, string> = {}
 
   for (const target of config.targets) {
-    if (target.auth?.passwordEnv) {
-      const envName = target.auth.passwordEnv
+    for (const envName of [target.auth?.usernameEnv, target.auth?.passwordEnv]) {
+      if (!envName) continue
       const value = process.env[envName]
       if (!value) {
         missing.push(envName)
@@ -42,22 +43,23 @@ export async function loadConfig(root: string): Promise<{ config: Config; secret
     }
   }
 
-  // Resolve required service secrets
-  const anthropicApiKey = process.env['ANTHROPIC_API_KEY']
-  const githubToken = process.env['GITHUB_TOKEN']
-
-  if (!anthropicApiKey) missing.push('ANTHROPIC_API_KEY')
-  if (!githubToken) missing.push('GITHUB_TOKEN')
-
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`)
   }
 
+  // Service secrets are OPTIONAL — needed only by specific commands
+  // (ANTHROPIC_API_KEY for AI scenario generation / verification, GITHUB_TOKEN for
+  // issue filing). Resolve to empty string when absent so launch/login-only flows
+  // (init, down, login execution) work without them; commands that need them fail
+  // with a clear message at point of use.
+  const anthropicApiKey = process.env['ANTHROPIC_API_KEY'] ?? ''
+  const githubToken = process.env['GITHUB_TOKEN'] ?? ''
+
   const secrets: Secrets = {
     db: dbSecrets,
     targetAuth: targetAuthSecrets,
-    anthropicApiKey: anthropicApiKey as string,
-    githubToken: githubToken as string,
+    anthropicApiKey,
+    githubToken,
   }
 
   return { config, secrets }

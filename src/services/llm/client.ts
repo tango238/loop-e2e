@@ -39,6 +39,14 @@ export function createLlm(
   options: CreateLlmOptions = {},
 ): Llm {
   const { backoffMs = 500 } = options
+  // ANTHROPIC_API_KEY is optional at config-load time so launch/login-only flows
+  // work without it. Fail with a clear message only when a real client is needed
+  // (no injected client) but the key is absent — instead of a cryptic 401 later.
+  if (!options.client && !apiKey) {
+    throw new Error(
+      'ANTHROPIC_API_KEY is required for AI features (scenario generation, diff/verify judgment, report). Set it in .env.',
+    )
+  }
   const client: AnthropicClient =
     options.client ?? (new Anthropic({ apiKey }) as unknown as AnthropicClient)
 
