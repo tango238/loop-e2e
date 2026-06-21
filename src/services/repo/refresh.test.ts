@@ -58,4 +58,18 @@ describe('refreshRepo', () => {
     await expect(refreshRepo(repo, 'main', '/base', { gitRunner: runner, secrets: ['tok-secret-123'] }))
       .rejects.not.toThrow(/tok-secret-123/)
   })
+
+  it('unexpected (non-conflict) stash apply error is masked and re-thrown', async () => {
+    const runner = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === 'status') return { stdout: ' M file.ts\n', stderr: '' }
+      if (args[0] === 'stash' && args[1] === 'apply') throw new Error('fatal: unexpected tok-secret-999')
+      return { stdout: '', stderr: '' }
+    })
+    await expect(
+      refreshRepo(repo, 'main', '/base', { gitRunner: runner, secrets: ['tok-secret-999'] }),
+    ).rejects.toSatisfy((err: unknown) => {
+      const msg = (err as Error).message
+      return !msg.includes('tok-secret-999')
+    })
+  })
 })

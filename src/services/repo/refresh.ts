@@ -42,7 +42,7 @@ export async function refreshRepo(
     await git(file, args, cloneCwd ? { cwd: cloneCwd } : undefined)
   }
 
-  // Ensure the clone exists (token only used here, masked inside ensureRepoClone).
+  // Ensure the clone exists (secrets[0] is the git auth token by convention).
   await ensureRepoClone(
     repo,
     secrets[0] ?? '',
@@ -65,17 +65,24 @@ export async function refreshRepo(
 
   if (dirty) {
     // Restore WIP. Use apply (not pop) so a conflict leaves the stash intact.
+    // Route through run() so any error message has secrets masked before we inspect or re-throw it.
     try {
-      await git('git', ['stash', 'apply'], { cwd })
-      await git('git', ['stash', 'drop'], { cwd })
+      await run(['stash', 'apply'])
+      await run(['stash', 'drop'])
       logger.info({ repo: repo.name }, 'restored stashed changes (no conflict)')
-    } catch {
-      // Conflict: undo the partial apply, keep the stash, warn and continue.
-      await git('git', ['reset', '--hard', 'HEAD'], { cwd }).catch(() => {})
-      logger.warn(
-        { repo: repo.name },
-        'stash conflict on auto-restore — WIP kept in stash; run `git stash pop` manually to restore',
-      )
+    } catch (err) {
+      const msg = (err as Error).message ?? ''
+      if (/conflict/i.test(msg)) {
+        // Conflict: undo the partial apply, keep the stash, warn and continue.
+        await run(['reset', '--hard', 'HEAD']).catch(() => {})
+        logger.warn(
+          { repo: repo.name },
+          'stash conflict on auto-restore — WIP kept in stash; run `git stash pop` manually to restore',
+        )
+      } else {
+        // Unexpected error — already masked by run(); re-throw so the caller knows.
+        throw err
+      }
     }
   }
 }
