@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectRequirements, type RequirementContext, type RepoConfig, type IngestionConfig } from './reader.js'
 import type { Llm } from '../llm/client.js'
-import type { GitRunner } from './clone.js'
 import type { GitLogRunner } from './gitlog.js'
 
 const repo: RepoConfig = {
@@ -27,46 +26,14 @@ function makeMockLlm(): Llm {
 }
 
 describe('collectRequirements', () => {
-  let tempRepoDir: string
-  let root: string
+  it('returns RequirementContext for each repo reading from repos/<name> directly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    const repoDir = join(root, 'repos', repo.name)
+    await mkdir(repoDir, { recursive: true })
+    await mkdir(join(repoDir, 'src'), { recursive: true })
+    await writeFile(join(repoDir, 'README.md'), '# Test App\nDoes stuff', 'utf8')
+    await writeFile(join(repoDir, 'src', 'index.ts'), 'export const x = 1', 'utf8')
 
-  // We need to set up a fake local path that the gitRunner will "clone" into.
-  // We override ensureRepoClone via the gitRunner (which creates the dir).
-
-  async function setupFakeRepo(files: Record<string, string>): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-repo-'))
-    for (const [rel, content] of Object.entries(files)) {
-      const abs = join(dir, rel)
-      await mkdir(join(abs, '..'), { recursive: true })
-      await writeFile(abs, content, 'utf8')
-    }
-    return dir
-  }
-
-  it('returns RequirementContext for each repo', async () => {
-    root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
-    tempRepoDir = await setupFakeRepo({
-      'README.md': '# Test App\nDoes stuff',
-      'src/index.ts': 'export const x = 1',
-    })
-
-    // gitRunner: simulates clone by noting the target dir path
-    // We need to make ensureRepoClone return our tempRepoDir.
-    // Since the real ensureRepoClone computes the path as `root/repos/name`,
-    // we pre-create that dir with our files.
-    const expectedCloneDir = join(root, 'repos', repo.name)
-    await mkdir(expectedCloneDir, { recursive: true })
-    // Copy files
-    for (const [rel, content] of Object.entries({
-      'README.md': '# Test App\nDoes stuff',
-      'src/index.ts': 'export const x = 1',
-    })) {
-      const abs = join(expectedCloneDir, rel)
-      await mkdir(join(abs, '..'), { recursive: true })
-      await writeFile(abs, content, 'utf8')
-    }
-
-    const gitRunner: GitRunner = async () => {}  // no-op: dir already exists
     const gitLogRunner: GitLogRunner = async () => 'abc123 2024-01-01 Initial commit'
 
     const contexts = await collectRequirements([repo], {
@@ -74,7 +41,6 @@ describe('collectRequirements', () => {
       token: 'fake-token',
       root,
       ingestion,
-      gitRunner,
       gitLogRunner,
     })
 
@@ -85,24 +51,56 @@ describe('collectRequirements', () => {
     expect(ctx.gitlogSummary).toContain('Initial commit')
 
     await rm(root, { recursive: true, force: true })
-    await rm(tempRepoDir, { recursive: true, force: true })
+  })
+
+  it('throws a clear error when repos/<name> does not exist', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    // deliberately do NOT create repos/test-app
+
+    await expect(
+      collectRequirements([repo], {
+        llm: makeMockLlm(),
+        token: 'fake-token',
+        root,
+        ingestion,
+      }),
+    ).rejects.toThrow("repository not cloned: test-app — run 'loop-e2e init' first")
+
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('does not call ensureRepoClone (no gitRunner passed, yet succeeds when repos/<name> exists)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    const repoDir = join(root, 'repos', repo.name)
+    await mkdir(repoDir, { recursive: true })
+    await writeFile(join(repoDir, 'README.md'), '# App', 'utf8')
+
+    const gitLogRunner: GitLogRunner = async () => ''
+
+    // No gitRunner injected — if ensureRepoClone were called it would try real git and fail
+    const contexts = await collectRequirements([repo], {
+      llm: makeMockLlm(),
+      token: 'fake-token',
+      root,
+      ingestion,
+      gitLogRunner,
+    })
+
+    expect(contexts).toHaveLength(1)
+    expect(contexts[0]?.readme).toContain('App')
+
+    await rm(root, { recursive: true, force: true })
   })
 
   it('merges --from files into codeSummary', async () => {
-    root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    const root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
     const fromFile = join(tmpdir(), 'extra-requirements.md')
     await writeFile(fromFile, '# Extra Requirements\nMust handle payments')
 
-    const expectedCloneDir = join(root, 'repos', repo.name)
-    await mkdir(expectedCloneDir, { recursive: true })
-    await writeFile(join(expectedCloneDir, 'src', 'index.ts'), 'export {}', 'utf8').catch(
-      async () => {
-        await mkdir(join(expectedCloneDir, 'src'), { recursive: true })
-        await writeFile(join(expectedCloneDir, 'src', 'index.ts'), 'export {}', 'utf8')
-      },
-    )
+    const repoDir = join(root, 'repos', repo.name)
+    await mkdir(join(repoDir, 'src'), { recursive: true })
+    await writeFile(join(repoDir, 'src', 'index.ts'), 'export {}', 'utf8')
 
-    const gitRunner: GitRunner = async () => {}
     const gitLogRunner: GitLogRunner = async () => ''
 
     const contexts = await collectRequirements([repo], {
@@ -111,7 +109,6 @@ describe('collectRequirements', () => {
       root,
       ingestion,
       fromPaths: [fromFile],
-      gitRunner,
       gitLogRunner,
     })
 
@@ -122,13 +119,12 @@ describe('collectRequirements', () => {
   })
 
   it('populates docs array with docs directory files', async () => {
-    root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
-    const expectedCloneDir = join(root, 'repos', repo.name)
-    await mkdir(join(expectedCloneDir, 'docs'), { recursive: true })
-    await writeFile(join(expectedCloneDir, 'docs', 'api.md'), '# API Docs')
-    await writeFile(join(expectedCloneDir, 'README.md'), '# Readme')
+    const root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    const repoDir = join(root, 'repos', repo.name)
+    await mkdir(join(repoDir, 'docs'), { recursive: true })
+    await writeFile(join(repoDir, 'docs', 'api.md'), '# API Docs')
+    await writeFile(join(repoDir, 'README.md'), '# Readme')
 
-    const gitRunner: GitRunner = async () => {}
     const gitLogRunner: GitLogRunner = async () => ''
 
     const contexts = await collectRequirements([repo], {
@@ -136,7 +132,6 @@ describe('collectRequirements', () => {
       token: 'fake-token',
       root,
       ingestion,
-      gitRunner,
       gitLogRunner,
     })
 
@@ -147,19 +142,17 @@ describe('collectRequirements', () => {
   })
 
   it('docs files do not appear in codeSummary (no double-counting)', async () => {
-    root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
-    const expectedCloneDir = join(root, 'repos', repo.name)
-    await mkdir(join(expectedCloneDir, 'docs'), { recursive: true })
-    await mkdir(join(expectedCloneDir, 'src'), { recursive: true })
+    const root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    const repoDir = join(root, 'repos', repo.name)
+    await mkdir(join(repoDir, 'docs'), { recursive: true })
+    await mkdir(join(repoDir, 'src'), { recursive: true })
     const docContent = 'UNIQUE_DOC_SENTINEL_XYZ: This belongs only in docs[]'
-    await writeFile(join(expectedCloneDir, 'docs', 'guide.md'), docContent)
-    await writeFile(join(expectedCloneDir, 'src', 'index.ts'), 'export const x = 1')
-    await writeFile(join(expectedCloneDir, 'README.md'), '# Readme')
+    await writeFile(join(repoDir, 'docs', 'guide.md'), docContent)
+    await writeFile(join(repoDir, 'src', 'index.ts'), 'export const x = 1')
+    await writeFile(join(repoDir, 'README.md'), '# Readme')
 
-    // Use a real LLM mock that passes source content through (simulates summarize passthrough)
     const llm: Llm = { complete: vi.fn(async () => 'summarized source') } as unknown as Llm
 
-    const gitRunner: GitRunner = async () => {}
     const gitLogRunner: GitLogRunner = async () => ''
 
     const contexts = await collectRequirements([repo], {
@@ -167,7 +160,6 @@ describe('collectRequirements', () => {
       token: 'fake-token',
       root,
       ingestion,
-      gitRunner,
       gitLogRunner,
     })
 

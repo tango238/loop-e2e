@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, access } from 'node:fs/promises'
+import { join } from 'node:path'
 import { logger } from '../../util/logger.js'
 import { selectFiles, estimateTokens } from './select.js'
 import { summarizeIfOverBudget } from './summarize.js'
 import { readGitLog, type GitLogRunner } from './gitlog.js'
-import { ensureRepoClone, type GitRunner } from './clone.js'
 import type { Llm } from '../llm/client.js'
 import type { Config } from '../../config/schema.js'
 
@@ -33,7 +33,6 @@ export type CollectReaderDeps = {
   ingestion: IngestionConfig
   /** Optional extra requirement files to merge in (from --from flag) */
   fromPaths?: string[]
-  gitRunner?: GitRunner
   gitLogRunner?: GitLogRunner
 }
 
@@ -61,19 +60,23 @@ export async function collectRequirements(
   return contexts
 }
 
+async function repoLocalPath(root: string, repoName: string): Promise<string> {
+  const localPath = join(root, 'repos', repoName)
+  try {
+    await access(localPath)
+  } catch {
+    throw new Error(`repository not cloned: ${repoName} — run 'loop-e2e init' first`)
+  }
+  return localPath
+}
+
 async function collectForRepo(
   repo: RepoConfig,
   deps: CollectReaderDeps,
 ): Promise<RequirementContext> {
   logger.info({ repo: repo.name }, 'Collecting requirements')
 
-  const localPath = await ensureRepoClone(
-    repo,
-    deps.token,
-    deps.ingestion,
-    deps.root,
-    deps.gitRunner,
-  )
+  const localPath = await repoLocalPath(deps.root, repo.name)
 
   const [files, gitlogSummary] = await Promise.all([
     selectFiles(localPath, deps.ingestion.tokenBudgetPerRepo),

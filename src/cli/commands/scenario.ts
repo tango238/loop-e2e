@@ -5,7 +5,6 @@ import { generateScenarios } from '../../services/llm/scenarioGen.js'
 import { loadScenarios, saveScenario, type Scenario } from '../../scenario/schema.js'
 import { logger } from '../../util/logger.js'
 import type { Llm } from '../../services/llm/client.js'
-import type { GitRunner } from '../../services/repo/clone.js'
 import type { GitLogRunner } from '../../services/repo/gitlog.js'
 import type { RequirementContext } from '../../services/repo/reader.js'
 
@@ -17,7 +16,6 @@ export type ScenarioOpts = {
 /** Injectable dependencies for scenario command — makes the command testable. */
 export type ScenarioDeps = {
   llm?: Llm
-  gitRunner?: GitRunner
   gitLogRunner?: GitLogRunner
   /** Injected for tests; defaults to stdin confirm */
   confirm?: (message: string) => Promise<boolean>
@@ -57,7 +55,6 @@ export async function runScenario(
     root,
     ingestion: config.ingestion,
     fromPaths: opts.from,
-    gitRunner: deps.gitRunner,
     gitLogRunner: deps.gitLogRunner,
   })
 
