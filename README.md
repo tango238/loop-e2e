@@ -158,6 +158,167 @@ APP_USER=admin
 APP_PASS=pass
 ```
 
+## Local-launch workflow
+
+`loop-e2e` can manage a local Docker Compose stack so you can run the full E2E
+loop on your laptop without a deployed staging environment. The stack lifecycle
+(`up`, readiness poll, seed, `down`) is wired into the four CLI commands:
+
+```
+loop-e2e init      # clone repos → docker compose up -d → readiness → seed
+loop-e2e scenario  # generate scenarios from cloned source
+loop-e2e run       # execute login + verify against the live local stack
+loop-e2e down      # docker compose down → clear state
+```
+
+### Base directory layout
+
+```
+<project-root>/
+  loop-e2e.config.yaml      # project config (includes launch block)
+  .env                      # secrets — never commit this
+  repos/
+    <name>/                 # shallow clones (one per repository)
+  scenarios/
+    *.scenario.yaml         # generated scenario files
+  .loop-e2e/
+    process.json            # running stack state (projectName, composeFiles, …)
+    baseline/               # site structure baseline
+    reports/                # per-run reports
+    feedback/               # feedback items
+    known-findings/         # acknowledged false-positives
+```
+
+### `launch` config block
+
+Add a `launch` section to `loop-e2e.config.yaml`:
+
+```yaml
+launch:
+  compose:
+    files:
+      - docker-compose.yml        # relative to the project root, or absolute
+    projectName: my-app-local
+    envFile: .env                 # optional — passed as --env-file to compose
+
+  readiness:
+    url: http://localhost:3000/health
+    timeoutSec: 180               # how long to wait for the stack (default 180)
+    intervalSec: 3                # poll interval (default 3)
+
+  seed:
+    command: docker exec my-app-db psql -U postgres -d app -f /seed.sql
+
+  targetName: local               # must match a name in targets[]
+```
+
+Full config example with `launch`:
+
+```yaml
+repositories:
+  - name: frontend
+    label: Frontend
+    url: https://github.com/org/frontend
+    role: frontend
+    audience: user
+
+targets:
+  - name: local
+    baseUrl: http://localhost:3000
+    auth:
+      strategy: form
+      loginPath: /login
+      usernameEnv: APP_USER
+      passwordEnv: APP_PASS
+
+databases:
+  - name: main
+    type: postgres
+    host: localhost
+    port: 5432
+    database: app
+    user: postgres
+    passwordEnv: DB_PASS
+
+schedule:
+  intervalMinutes: 60
+
+scenarioDir: scenarios
+
+github:
+  labels:
+    ready: e2e-ready
+    autoDetect: e2e-auto
+
+baseline:
+  commit: false
+
+models:
+  planning: claude-opus-4-8
+  report: claude-sonnet-4-6
+  verification: claude-opus-4-8
+
+ingestion:
+  cloneDepth: 50
+  tokenBudgetPerRepo: 120000
+  gitLogCount: 50
+
+refutation:
+  panelSize: 3
+  confidenceThreshold: 0.8
+  lenses:
+    - correctness
+    - security
+    - intentionality
+
+launch:
+  compose:
+    files:
+      - docker-compose.yml
+    projectName: my-app-local
+  readiness:
+    url: http://localhost:3000/health
+    timeoutSec: 180
+    intervalSec: 3
+  seed:
+    command: docker exec my-app-db psql -U postgres -d app -f /seed.sql
+  targetName: local
+```
+
+### `.env` keys for local launch
+
+```dotenv
+# Anthropic and GitHub (required by all commands)
+ANTHROPIC_API_KEY=sk-ant-...
+GITHUB_TOKEN=ghp_...
+
+# Database password — name must match passwordEnv in databases[]
+DB_PASS=secret
+
+# Target auth credentials — names must match usernameEnv/passwordEnv in targets[].auth
+APP_USER=admin@example.com
+APP_PASS=changeme
+```
+
+### Seed idempotency
+
+The `seed.command` is run by `loop-e2e init` every time it is called. Your seed
+script must be safe to run more than once. Use `INSERT … ON CONFLICT DO NOTHING`
+(Postgres) or equivalent, or gate on `IF NOT EXISTS`. The sample seed in
+`examples/sample-stack/seed.sql` demonstrates this pattern.
+
+### Scheduling
+
+`loop-e2e` has no built-in scheduler. Run `init` once to bring the stack up,
+then schedule `loop-e2e run` externally (cron, CI) to repeat the verify loop.
+Call `loop-e2e down` to tear down when done.
+
+### Sample stack
+
+`examples/sample-stack/` contains a minimal nginx + postgres compose stack you
+can use to smoke-test the local-launch workflow without a real application. See
+the `.env.example` there for the required variables.
+
 ## Scheduling with cron
 
 `loop-e2e` has no built-in scheduler. Use your OS cron or any job runner:
