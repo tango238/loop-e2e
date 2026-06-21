@@ -60,4 +60,20 @@ describe('upsertIssue', () => {
 
     expect(client.issues.create).toHaveBeenCalled()
   })
+
+  it('masks secrets in issue title before creating', async () => {
+    const client = makeMockClient([])
+    const secretValue = 'super-secret-api-key'
+    const findingWithSecretInTitle = {
+      title: `Bug found: ${secretValue} exposed`,
+      body: 'Body text without secret.',
+      fingerprint: 'fp-title-mask',
+    }
+
+    await upsertIssue(client, repo, findingWithSecretInTitle, 'Auto-Detect', [secretValue])
+
+    const createCall = (client.issues.create as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { title: string }
+    expect(createCall.title).not.toContain(secretValue)
+    expect(createCall.title).toContain('***')
+  })
 })

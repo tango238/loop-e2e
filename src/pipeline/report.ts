@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises'
 import { ensureDir } from '../util/fs.js'
 import { fingerprint } from '../util/hash.js'
 import { logger } from '../util/logger.js'
+import { maskSecrets } from '../util/mask.js'
 import { statePaths } from '../state/paths.js'
 import type {
   RunContext,
@@ -125,9 +126,18 @@ export async function writeReport(
 
   const target = ctx.config.targets[0]?.name ?? 'unknown'
 
-  // 1. Generate report body with Sonnet
+  // Collect ALL secrets for masking — anthropicApiKey, githubToken, all db passwords, all target auth values
+  const allSecrets: string[] = [
+    ctx.secrets.anthropicApiKey,
+    ctx.secrets.githubToken,
+    ...Object.values(ctx.secrets.db),
+    ...Object.values(ctx.secrets.targetAuth),
+  ].filter((s): s is string => Boolean(s))
+
+  // 1. Generate report body with Sonnet, then mask any secrets that crept in via LLM output
   const reportPrompt = buildReportPrompt(diffFindings, verifyFindings, target)
-  const reportBody = await llm.complete('report', reportPrompt)
+  const rawReportBody = await llm.complete('report', reportPrompt)
+  const reportBody = maskSecrets(rawReportBody, allSecrets)
 
   // 2. Adjudicate each finding (parallel — panel inside each adjudicate also parallelizes)
   const allFindings: (DiffFinding | VerifyFinding)[] = [...diffFindings, ...verifyFindings]
@@ -154,9 +164,8 @@ export async function writeReport(
     }),
   )
 
-  // 3. File GitHub issues for gate-passed findings
+  // 3. File GitHub issues for gate-passed findings — pass full secret set
   if (githubClient && repo) {
-    const secrets = [ctx.secrets.anthropicApiKey, ctx.secrets.githubToken].filter(Boolean)
     for (const { finding, verdict, fp } of gatePassedFindings) {
       try {
         await upsertIssue(
@@ -168,7 +177,7 @@ export async function writeReport(
             fingerprint: fp,
           },
           ctx.config.github.labels.autoDetect,
-          secrets,
+          allSecrets,
         )
       } catch (error) {
         logger.error({ error }, 'Failed to upsert issue — continuing')
@@ -201,9 +210,11 @@ export async function writeReport(
 
   const mdContent = `${reportBody}${uncertainSection}\n`
 
-  // 6. Write files
-  await writeFile(join(reportDir, 'report.json'), JSON.stringify(report, null, 2), 'utf8')
-  await writeFile(join(reportDir, 'report.md'), mdContent, 'utf8')
+  // 6. Write files — mask secrets from both written artifacts before persisting
+  const safeMd = maskSecrets(mdContent, allSecrets)
+  const safeJson = maskSecrets(JSON.stringify(report, null, 2), allSecrets)
+  await writeFile(join(reportDir, 'report.json'), safeJson, 'utf8')
+  await writeFile(join(reportDir, 'report.md'), safeMd, 'utf8')
   logger.info({ runId, reportDir }, 'Report written')
 
   // 7. Update baseline

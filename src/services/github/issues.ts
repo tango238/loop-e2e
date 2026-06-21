@@ -42,14 +42,15 @@ export async function upsertIssue(
       return
     }
 
-    // Mask secrets from the body before publishing
+    // Mask secrets from both title and body before publishing
+    const maskedTitle = maskSecrets(finding.title, secrets)
     const maskedBody = maskSecrets(finding.body, secrets)
     const bodyWithFingerprint = `${maskedBody}\n\n<!-- fingerprint: ${finding.fingerprint} -->`
 
     await client.issues.create({
       owner: repo.owner,
       repo: repo.name,
-      title: finding.title,
+      title: maskedTitle,
       body: bodyWithFingerprint,
       labels: [autoDetectLabel],
     })

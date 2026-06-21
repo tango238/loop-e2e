@@ -193,4 +193,55 @@ describe('writeReport', () => {
     const parsed = JSON.parse(jsonRaw) as { diffFindings: unknown[] }
     expect(parsed.diffFindings).toHaveLength(0)
   })
+
+  it('secrets from ctx do not appear in written report.md or report.json', async () => {
+    const secretApiKey = 'sk-SHOULD-NOT-APPEAR-IN-REPORT'
+    const secretGhToken = 'gh-SHOULD-NOT-APPEAR-IN-REPORT'
+
+    // Inject secret values into finding fields so they'd appear if not masked
+    const finding = makeDiffFinding({
+      expected: `Expected value with ${secretApiKey}`,
+      actual: `Actual value with ${secretGhToken}`,
+    })
+    const verdict = makeVerdict({ classification: 'bug', confidence: 0.9, rationale: `rationale with ${secretApiKey}` })
+    const adjudicateMock = vi.fn().mockResolvedValue(verdict)
+    const upsertIssueMock = vi.fn().mockResolvedValue(undefined)
+    const storeMock = { saveBaseline: vi.fn().mockResolvedValue(undefined) }
+    const llm: Llm = {
+      complete: vi.fn().mockResolvedValue(`Summary mentioning ${secretApiKey}`),
+    } as unknown as Llm
+
+    const ctx: RunContext = {
+      ...makeCtx(tmpRoot),
+      secrets: {
+        db: { DB_PASS: 'db-secret-value' },
+        targetAuth: { AUTH_PASS: 'auth-secret-value' },
+        anthropicApiKey: secretApiKey,
+        githubToken: secretGhToken,
+      },
+    }
+
+    await writeReport(tmpRoot, ctx.runId, {
+      ctx,
+      diffFindings: [finding],
+      verifyFindings: [],
+      llm,
+      adjudicate: adjudicateMock,
+      upsertIssue: upsertIssueMock,
+      store: storeMock,
+      githubClient: {} as never,
+      repo: { owner: 'acme', name: 'myapp' },
+      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
+    })
+
+    const reportDir = join(tmpRoot, '.loop-e2e', 'reports', ctx.runId)
+    const mdContent = await readFile(join(reportDir, 'report.md'), 'utf8')
+    const jsonContent = await readFile(join(reportDir, 'report.json'), 'utf8')
+
+    // Neither the API key nor the GitHub token should appear in any written file
+    expect(mdContent).not.toContain(secretApiKey)
+    expect(mdContent).not.toContain(secretGhToken)
+    expect(jsonContent).not.toContain(secretApiKey)
+    expect(jsonContent).not.toContain(secretGhToken)
+  })
 })
