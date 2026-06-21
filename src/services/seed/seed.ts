@@ -1,15 +1,11 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import { maskSecrets } from '../../util/mask.js'
 import type { ComposeRunner } from '../compose/compose.js'
-
-const pexec = promisify(execFile)
-const defaultRunner: ComposeRunner = (cmd, args, opts) => pexec(cmd, args, opts) as Promise<{ stdout: string; stderr: string }>
+import { defaultComposeRunner } from '../compose/compose.js'
 
 export async function seedDatabase(
   seed: { command: string },
   root: string,
-  runner: ComposeRunner = defaultRunner,
+  runner: ComposeRunner = defaultComposeRunner,
   secrets: string[] = [],
 ): Promise<void> {
   try {

@@ -10,6 +10,6 @@ describe('waitForReadiness', () => {
   })
   it('throws on timeout when never 2xx', async () => {
     const fetchFn = vi.fn(async () => ({ status: 500 }))
-    await expect(waitForReadiness('http://x', { timeoutSec: 2, intervalSec: 1 }, fetchFn, noSleep)).rejects.toThrow(/not ready/)
+    await expect(waitForReadiness('http://x', { timeoutSec: 2, intervalSec: 1 }, fetchFn, noSleep)).rejects.toThrow(/readiness check failed:.*not ready/)
   })
 })
