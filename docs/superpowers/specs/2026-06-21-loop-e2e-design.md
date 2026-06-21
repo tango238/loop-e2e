@@ -39,6 +39,16 @@
 | 反証検証（品質ゲート） | **Opus** | レポート生成後、各フィンディングを**反証（refute）**して妥当性を確定。耐えたものだけ確定扱い |
 
 `config.models = { planning, report, verification }` で各既定モデルIDを上書き可能（既定: planning/verification=Opus, report=Sonnet）。
+
+### 2.2 リポジトリ取り込み（ingestion）方針
+
+- **取得**: 対象リポジトリをローカル **shallow clone**（`git clone --depth <cloneDepth>`、既定50）して `.loop-e2e/repos/<name>` にキャッシュ。2回目以降は `git fetch` で更新。認証はトークン（`.env`）。Git ログは clone から `git log -n <gitLogCount>` で取得・要約。
+- **蒸留（選別＋要約ハイブリッド）**:
+  1. **常時全量投入（高シグナル）**: README/`docs/**`、DBスキーマ/マイグレーション、ルーティング定義、OpenAPI/GraphQLスキーマ。
+  2. **選別**: パス/ファイル名ヒューリスティクスでスコアリング（controllers/services/models/routes/pages/views/handlers/forms/validators を加点、node_modules/dist/build/vendor/tests/lock/バイナリ/生成物を除外）。スコア順に **`tokenBudgetPerRepo`（既定120k）** までグリーディに採用。
+  3. **予算超過時**: 採用ファイル群を Opus で **map-reduce 階層要約**（チャンク要約→統合）。予算内なら原文のまま投入。
+  4. トークン量は概算（文字数ベース＋安全係数）。設定で予算・depth・ログ件数を調整可能。
+- 出力 `RequirementContext { repo, readme, docs[], codeSummary, gitlogSummary }` を `scenario` 生成に渡す。
 | サイト読込/操作 | **Playwright（ヘッドレス）** | レンダリング後DOM・スクリーンショット取得、フォーム入力・ログイン自動操作。 |
 | DB検証 | **PostgreSQL + MySQL（必須）** | `pg` / `mysql2`。対象システムにより接続を切替。アダプタで抽象化。 |
 | 定期実行 | **設定値の保存のみ＋外部cron** | CLIは `run` を単発実行。 |
@@ -61,7 +71,9 @@ DbConnection         { name, type: 'postgres'|'mysql', host, port, database, use
 
 Config               { repositories[], targets[], databases[], schedule, scenarioDir, github,
                        baseline: { commit: boolean },   // 既定 false（非コミット）
-                       models: { planning, report, verification } }
+                       models: { planning, report, verification },
+                       ingestion: { cloneDepth, tokenBudgetPerRepo, gitLogCount },
+                       refutation: { panelSize, confidenceThreshold, lenses[] } }
 
 PageInfo             { url, title, description, meta{}, displayItems[], inputItems[],
                        expectations[],   // この画面に期待すること
@@ -80,10 +92,16 @@ DiffFinding          { kind: 'transition'|'displayItem'|'inputItem'|'expectation
                        severity, expected, actual, location }
 VerifyFinding        { category: 'layout'|'security'|'conditional'|'registered-data'|'error-handling',
                        severity, title, detail, evidence }
-FindingVerdict       { classification: 'bug'|'unnecessary'|'uncertain',  // 反証検証の確定結果
-                       confidence, rationale, refutationAttempted: true }
-// classification ∈ {bug, unnecessary} かつ反証を耐えたもの → 自動Issue起票
-// classification = uncertain → レポートのみ（ユーザー報告）
+RefuterVote          { lens: 'correctness'|'security'|'intentionality',
+                       refuted: boolean,            // この視点で「実害なし/意図的」と反証できたか
+                       classification: 'bug'|'unnecessary'|'uncertain', confidence, rationale }
+FindingVerdict       { classification: 'bug'|'unnecessary'|'uncertain',  // パネル集約後の確定結果
+                       confidence,                  // パネル平均confidence（確定classに対して）
+                       confirmedCount, panelSize, votes: RefuterVote[], rationale }
+// 自動Issue起票の条件（両ゲートを満たすこと）:
+//  (1) パネル多数決: N人中 過半が反証失敗（=実バグ/不要と確認）→ classification∈{bug,unnecessary}
+//  (2) confidence ≥ refutation.confidenceThreshold（既定0.8）
+// いずれか満たさない → classification=uncertain 相当 → レポートのみ（ユーザー報告）
 Report               { runId, startedAt, target, diffFindings[], verifyFindings[],
                        siteStructureRef, summary }
 Feedback             { id, targetFindingId?, userComment, verdict?, appliedTo[] }
@@ -185,7 +203,7 @@ src/
 
 ### 6.2 `scenario` — シナリオ生成
 - 入力（自動収集）: 対象リポジトリの **README / docs / ソースコード / Git ログ** を自動読込して要件・ユースケースを抽出。加えて任意で `--from <path>` の専用要件ファイル/ディレクトリを併用。
-  - 収集はリポジトリ単位。`role`/`audience` ラベルで文脈付け。ソースコードは規模が大きいため要約・関連抽出してからLLMへ渡す（トークン制御）。Git ログは直近の変更履歴から業務フローの変化を補足。
+  - 収集はリポジトリ単位。`role`/`audience` ラベルで文脈付け。取得・蒸留方式は **§2.2 ingestion**（shallow clone キャッシュ＋選別＋要約ハイブリッド）に従い、`RequirementContext[]` を得る。Git ログは直近の変更履歴から業務フローの変化を補足。
 - 処理（Opus）:
   1. Claude が要件・ユースケース・コード・履歴から**業務フロー**を洗い出す
   2. 各フローを検証用**シナリオ**（手順 `steps`）に変換
@@ -219,9 +237,11 @@ src/
 
 **3-4 レポート（report）**
 - レポート本文生成（**Sonnet**）: 収集済みの差分・検証結果からレポートを生成。
-- **反証検証（Opus・品質ゲート）**: 各フィンディングに対し Opus が反証（refute）を試み `FindingVerdict` を確定。
-  - `classification ∈ {bug, unnecessary}` かつ反証を耐えたもの = **明確にバグ/不要な処理** → GitHub Issue を起票し `Auto-Detect` ラベル付与。重複起票防止のため fingerprint で既存Issueと突合。
-  - `classification = uncertain`（判断不能） → **自動起票せず**、レポートに「ユーザー確認要」として記載。
+- **反証検証（Opus・パネル多数決の品質ゲート）**: 各フィンディングに対し、`refutation.lenses`（既定 `correctness`/`security`/`intentionality`）の視点で **N人（`panelSize`、既定3）の Opus が独立に反証**を試みる。各 `RefuterVote` を集約して `FindingVerdict` を確定。
+  - 自動起票の条件（**両ゲート**）: ① N人中 **過半が反証失敗**（=実バグ/不要と確認、classification∈{bug,unnecessary}） かつ ② **confidence ≥ `confidenceThreshold`（既定0.8）**。
+  - 満たすもの = **明確にバグ/不要な処理** → GitHub Issue を起票し `Auto-Detect` ラベル付与。重複起票防止のため fingerprint で既存Issueと突合。
+  - いずれか満たさない（=`uncertain` 相当） → **自動起票せず**、レポートに「ユーザー確認要」として記載。
+  - コスト制御: パネルにかけるのは起票候補（diff/verify で検出されたフィンディング）のみ。
 - 結果を `reports/<runId>/report.md` ＋ `report.json` に保存。
 - 差分結果・サイト構造を整理し `baseline/site-structure.json` を更新（次回差分の基準）。`config.baseline.commit=true` の場合のみ baseline を git 管理対象に含める運用とする。
 
@@ -268,6 +288,12 @@ src/
 - **Issue 自動起票**: 反証検証（Opus）で「明確にバグ/不要な処理」と確定したもののみ起票。判断不能はレポートでユーザー報告。
 - **モデル使い分け**: 計画・分析・判断＝Opus、レポート生成＝Sonnet、反証検証＝Opus（§2.1）。
 
-### 残課題（実装中に詰める）
-- ソースコード自動読込のトークン制御（要約/関連抽出の具体手法と上限）。
-- 反証検証の `confidence` しきい値の初期値チューニング。
+### 取り込み・反証の詳細（2026-06-21 確定）
+- **ソース取得**: ローカル shallow clone（`.loop-e2e/repos/<name>` キャッシュ、`cloneDepth` 既定50、以降 fetch 更新）。
+- **蒸留**: 選別＋要約ハイブリッド。高シグナル成果物は常時投入、関連選別を `tokenBudgetPerRepo`（既定120k）まで採用、超過時 Opus map-reduce 要約（§2.2）。
+- **反証**: パネル多数決。`panelSize` 既定3、`lenses` 既定 correctness/security/intentionality。
+- **起票判定**: 過半が反証失敗 かつ confidence ≥ `confidenceThreshold`（既定0.8）。
+
+### 残課題（実装中に微調整）
+- トークン概算の係数とファイル選別ヒューリスティクスの精度（実リポジトリで調整）。
+- `panelSize` / `confidenceThreshold` / lenses の初期値の実地チューニング。
