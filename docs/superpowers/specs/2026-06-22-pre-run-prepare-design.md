@@ -21,7 +21,7 @@
 - 適用後: **戻さず冪等適用**（teardown はしない）。
 - フック記述: **シェルコマンドのリスト**。
 - 環境依存コマンドの配置: **ユーザーのワークスペース設定**（本体は汎用機構のみ）。
-- リポジトリ更新: 作業ツリーに変更があれば **stash（自動popしない）** → checkout → pull。
+- リポジトリ更新: 作業ツリーに変更があれば **stash** → checkout → pull → **WIPを復元（競合なし=自動pop、競合あり=手動）**。
 
 ### スコープ外
 - 起動済みアプリの再ビルド/再起動（必要ならユーザーの setup コマンドで `docker compose ... up -d --build` 等を記述）。
@@ -56,13 +56,16 @@ setup?: { command: string }[]   # run冒頭・repo更新の後に順次実行す
 ### 3.1 リポジトリ更新（`refreshRepos`）
 対象: `repositories[]` のうち `branch` が設定されたもの（順不同・各repo独立）。各 repo に対し:
 1. clone 未作成なら作成（既存の `ensureRepoClone` を `repos/<name>` に対して実行）。
-2. 作業ツリーが dirty（`git status --porcelain` が非空）なら `git stash push -u -m "loop-e2e auto-stash <ISO時刻>"`。
-   - **自動 pop はしない**（checkout/pull 後の競合を避ける）。退避した stash ref をログに残し、ユーザーが手動で復元できるようにする。
+2. 作業ツリーが dirty（`git status --porcelain` が非空）なら `git stash push -u -m "loop-e2e auto-stash <ISO時刻>"`（dirty かどうかを記録）。
 3. `git fetch <remote> <branch>`（shallow clone を考慮し `--depth` を尊重、必要に応じ `--depth` 付き fetch）。
 4. `git checkout <branch>`。
-5. `git pull --ff-only`（または `git reset --hard <remote>/<branch>` 相当で最新化）。既定は ff-only、失敗時はメッセージで通知。
-6. 既に該当ブランチかつ clean の場合は 2 を省略し fetch+pull のみ（冪等）。
-- いずれかの git 操作が失敗した repo はエラーを集約し run を中断（部分的に最新化された状態を明示）。トークンはマスク。
+5. `git pull --ff-only`（既定。早送り不可なら手動対応を促すメッセージ。`reset --hard <remote>/<branch>` 強制最新化は設定で選べる余地として未決）。
+6. **WIP の復元**（手順2で stash した場合のみ）— 「競合回避優先・競合なければ自動」:
+   - `git stash apply` を試行。
+   - **競合なし（成功）** → `git stash drop`。= WIP を自動復元（auto-pop 相当）。
+   - **競合あり（失敗）** → `git reset --hard HEAD` で適用を取り消し（作業ツリーを最新コードのクリーンな状態に戻す）。**stash は温存**（apply は drop しない）。ログに「WIPは stash に退避中・競合のため自動復元せず。`git stash list` / `git stash pop` で手動復元してください」と出力し、**run は最新コードで続行**（中断しない）。
+7. 既に該当ブランチかつ clean の場合は 2・6 を省略し fetch+pull のみ（冪等）。
+- いずれかの git 操作（fetch/checkout/pull 等）が失敗した repo はエラーを集約し run を中断（部分的に最新化された状態を明示）。**stash 復元の競合は中断理由にしない**（WIPは安全に温存され、最新コードで検証は可能なため警告のみ）。トークンはマスク。
 
 ### 3.2 setup フック
 - `setup[]` を順に `sh -c` 実行（cwd=root）。1つでも失敗したら以降を実行せず run 中断。
@@ -104,15 +107,15 @@ loop-e2e run [--target <name>] [--skip-prepare]
 ---
 
 ## 6. エラーハンドリング
-- repo 更新の git 失敗・setup コマンドの非ゼロ終了は run を中断し、どのステップ/どの repo/どのコマンドかを明示（秘密情報マスク）。
-- stash は自動 pop しないため WIP は失われない。退避時に stash の参照をログ出力。
+- repo 更新の git 失敗（fetch/checkout/pull）・setup コマンドの非ゼロ終了は run を中断し、どのステップ/どの repo/どのコマンドかを明示（秘密情報マスク）。
+- **WIP は失われない**: 競合なし時は自動復元（apply→drop）、競合時は復元せず stash に温存し手動復元を促す（中断はしない）。
 - `pull --ff-only` が早送りできない場合は手動対応を促すメッセージ。
 - すべての git/シェル出力・エラーは `maskSecrets(全シークレット)` を通す。
 
 ---
 
 ## 7. テスト戦略
-- **単体**: `refreshRepo`（dirty→stash→checkout→pull の順序、clean時はstash省略、失敗時の中断、トークンマスク）、`runSetupHooks`（順次実行・失敗で中断・マスク）、`prepare`（①→②の順、--skip-prepare で未実行）。git/shell runner はモック。
+- **単体**: `refreshRepo`（dirty→stash→checkout→pull の順序、clean時はstash省略、**WIP復元: apply成功→drop（自動復元）／apply競合→reset --hard＋stash温存＋警告で続行**、fetch/checkout/pull失敗時の中断、トークンマスク）、`runSetupHooks`（順次実行・失敗で中断・マスク）、`prepare`（①→②の順、--skip-prepare で未実行）。git/shell runner はモック。
 - **統合**: `run` 冒頭で prepare が呼ばれ、その後に検証本体が走ることを assert（全外部I/Oモック）。`--skip-prepare` で prepare が呼ばれないこと。
 - 既存テスト（312 pass + 3 skip）を壊さない。
 
