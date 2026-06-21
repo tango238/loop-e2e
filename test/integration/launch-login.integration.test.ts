@@ -291,6 +291,11 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
 
     const paths = statePaths(root)
 
+    // Capture the verifyFindings actually passed by runRun to writeReport so we
+    // can assert that the wiring from executeLogin → verifyFindings → writeReport
+    // is real (not hardcoded inside the mock).
+    let capturedVerifyFindings: VerifyFinding[] = []
+
     const runDeps: RunDeps = {
       collect: vi.fn().mockResolvedValue({
         structure: makeEmptyStructure(),
@@ -299,21 +304,17 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
       } satisfies CollectResult),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([] as VerifyFinding[]),
-      writeReport: vi.fn().mockImplementation(async (r: string, id: string) => {
-        // Write a real report.json so we can assert on the file
-        const loginFinding: VerifyFinding = {
-          category: 'login',
-          severity: 'low',
-          title: 'Login succeeded',
-          detail: 'login succeeded: navigated to http://localhost:3000/dashboard',
-          evidence: 'finalUrl: http://localhost:3000/dashboard',
-        }
+      writeReport: vi.fn().mockImplementation(async (r: string, id: string, d: { verifyFindings: VerifyFinding[] }) => {
+        // Capture findings produced by runRun (including the login finding wired from executeLogin)
+        capturedVerifyFindings = d.verifyFindings
+
+        // Write a real report.json so the artifact assertion below still holds
         const report: Report = {
           runId: id,
           startedAt: new Date().toISOString(),
           target: 'app',
           diffFindings: [],
-          verifyFindings: [loginFinding],
+          verifyFindings: d.verifyFindings,
           verdicts: {},
           siteStructureRef: `runs/${id}.yaml`,
           summary: '## Summary\n\nLogin succeeded.\n',
@@ -343,11 +344,19 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
     // --- Assert: executeLogin called ---
     expect(executeLogin).toHaveBeenCalledOnce()
 
+    // --- Assert: runRun wired executeLogin's result into writeReport's verifyFindings ---
+    // This proves the pipeline wiring is real: a regression that stops passing
+    // loginFindings into writeReport would fail here, not just on the file artifact.
+    const capturedLoginFinding = capturedVerifyFindings.find((f) => f.category === 'login')
+    expect(capturedLoginFinding).toBeDefined()
+    expect(capturedLoginFinding?.severity).toBe('low')
+    expect(capturedLoginFinding?.title).toContain('Login succeeded')
+
     // --- Assert: report.json exists on disk ---
     const reportPath = join(paths.reports, runId, 'report.json')
     await expect(access(reportPath)).resolves.toBeUndefined()
 
-    // --- Assert: report.json contains login finding ---
+    // --- Assert: report.json on disk reflects the captured findings ---
     const reportContent = await readFile(reportPath, 'utf8')
     const report = JSON.parse(reportContent) as Report
     const loginFinding = report.verifyFindings.find((f) => f.category === 'login')

@@ -309,9 +309,9 @@ script must be safe to run more than once. Use `INSERT … ON CONFLICT DO NOTHIN
 
 ### Scheduling
 
-`loop-e2e` has no built-in scheduler. Run `init` once to bring the stack up,
-then schedule `loop-e2e run` externally (cron, CI) to repeat the verify loop.
-Call `loop-e2e down` to tear down when done.
+Run `loop-e2e init` once to bring the stack up, then schedule `loop-e2e run`
+to repeat the verify loop. Call `loop-e2e down` to tear down when done. See
+[Scheduling with cron](#scheduling-with-cron) for cron and CI examples.
 
 ### Sample stack
 
