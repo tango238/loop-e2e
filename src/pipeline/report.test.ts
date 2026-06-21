@@ -104,6 +104,10 @@ describe('writeReport', () => {
     })
 
     expect(upsertIssueMock).toHaveBeenCalledOnce()
+    // evidence must be non-empty so the Opus panel has context
+    const [, , evidenceArg] = adjudicateMock.mock.calls[0] as [unknown, unknown, string]
+    expect(evidenceArg).toBeTruthy()
+    expect(evidenceArg.length).toBeGreaterThan(0)
     const reportDir = join(tmpRoot, '.loop-e2e', 'reports', ctx.runId)
     const mdContent = await readFile(join(reportDir, 'report.md'), 'utf8')
     const jsonContent = await readFile(join(reportDir, 'report.json'), 'utf8')

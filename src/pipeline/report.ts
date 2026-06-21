@@ -70,6 +70,13 @@ function findingFingerprint(finding: DiffFinding | VerifyFinding): string {
   return fingerprint([finding.category, finding.title, finding.detail])
 }
 
+function buildEvidence(finding: DiffFinding | VerifyFinding): string {
+  if ('kind' in finding) {
+    return `kind=${finding.kind} location=${finding.location} expected=${finding.expected} actual=${finding.actual}`
+  }
+  return `category=${finding.category} title=${finding.title} detail=${finding.detail} evidence=${finding.evidence}`
+}
+
 function buildReportPrompt(
   diffFindings: DiffFinding[],
   verifyFindings: VerifyFinding[],
@@ -122,27 +129,30 @@ export async function writeReport(
   const reportPrompt = buildReportPrompt(diffFindings, verifyFindings, target)
   const reportBody = await llm.complete('report', reportPrompt)
 
-  // 2. Adjudicate each finding
+  // 2. Adjudicate each finding (parallel — panel inside each adjudicate also parallelizes)
   const allFindings: (DiffFinding | VerifyFinding)[] = [...diffFindings, ...verifyFindings]
   const verdicts: Record<string, FindingVerdict> = {}
   const gatePassedFindings: { finding: DiffFinding | VerifyFinding; verdict: FindingVerdict; fp: string }[] = []
   const uncertainFindings: { finding: DiffFinding | VerifyFinding; verdict: FindingVerdict }[] = []
 
-  for (const finding of allFindings) {
-    const fp = findingFingerprint(finding)
-    const verdict = await adjudicate(llm, finding, '', ctx.config.refutation)
-    verdicts[fp] = verdict
+  await Promise.all(
+    allFindings.map(async (finding) => {
+      const fp = findingFingerprint(finding)
+      const evidence = buildEvidence(finding)
+      const verdict = await adjudicate(llm, finding, evidence, ctx.config.refutation)
+      verdicts[fp] = verdict
 
-    const bothGatesPass =
-      (verdict.classification === 'bug' || verdict.classification === 'unnecessary') &&
-      verdict.confidence >= ctx.config.refutation.confidenceThreshold
+      const bothGatesPass =
+        (verdict.classification === 'bug' || verdict.classification === 'unnecessary') &&
+        verdict.confidence >= ctx.config.refutation.confidenceThreshold
 
-    if (bothGatesPass) {
-      gatePassedFindings.push({ finding, verdict, fp })
-    } else {
-      uncertainFindings.push({ finding, verdict })
-    }
-  }
+      if (bothGatesPass) {
+        gatePassedFindings.push({ finding, verdict, fp })
+      } else {
+        uncertainFindings.push({ finding, verdict })
+      }
+    }),
+  )
 
   // 3. File GitHub issues for gate-passed findings
   if (githubClient && repo) {
@@ -169,7 +179,7 @@ export async function writeReport(
   // 4. Build report object
   const report: Report = {
     runId,
-    startedAt: ctx.config.targets[0] ? new Date().toISOString() : new Date().toISOString(),
+    startedAt: new Date().toISOString(),
     target,
     diffFindings,
     verifyFindings,

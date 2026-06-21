@@ -47,8 +47,12 @@ program
       collect: async (_ctx, _deps) => {
         throw new Error('Real collect not wired — use programmatic API with deps')
       },
-      detectDiffs: async () => [],
-      writeReport: async () => {},
+      detectDiffs: async () => {
+        throw new Error('Real detectDiffs not yet wired (pending M6)')
+      },
+      writeReport: async () => {
+        throw new Error('Real writeReport not yet wired (pending M6)')
+      },
     })
   })
 

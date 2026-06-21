@@ -28,10 +28,12 @@ export type RunDeps = {
   llm?: import('../../services/llm/client.js').Llm
 }
 
-const emptyStructure: SiteStructure = {
-  generatedAt: new Date().toISOString(),
-  pages: [],
-  transitions: [],
+function makeEmptyStructure(): SiteStructure {
+  return {
+    generatedAt: new Date().toISOString(),
+    pages: [],
+    transitions: [],
+  }
 }
 
 const emptyPrior: PriorState = {
@@ -78,7 +80,7 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
   const runCtx: RunContext = { ...ctx, root, runId }
 
   // Stage 1: collect
-  let structure: SiteStructure = emptyStructure
+  let structure: SiteStructure = makeEmptyStructure()
   let prior: PriorState = emptyPrior
   try {
     const result = await collect(runCtx, {})
