@@ -148,6 +148,11 @@ export async function runInit(root: string, opts: InitOpts, deps: InitDeps): Pro
 }
 
 async function runLaunchOrchestration(root: string, launch: NonNullable<Config['launch']>, config: Config, deps: InitDeps): Promise<void> {
+  // All five launch deps are required — fail early with a clear error before touching any infrastructure
+  if (!deps.composeUp || !deps.waitForReadiness || !deps.seedDatabase || !deps.ensureRepoClone || !deps.saveProcessState) {
+    throw new Error('init launch requires deps: composeUp, waitForReadiness, seedDatabase, ensureRepoClone, saveProcessState')
+  }
+
   const secrets = deps.secrets ?? { anthropicApiKey: '', githubToken: '', db: {}, targetAuth: {} }
   const allSecrets = [
     secrets.anthropicApiKey,
@@ -156,56 +161,53 @@ async function runLaunchOrchestration(root: string, launch: NonNullable<Config['
     ...Object.values(secrets.targetAuth),
   ].filter(Boolean) as string[]
 
-  const token = secrets.githubToken ?? ''
+  const token = secrets.githubToken
+
+  // GitHub token is required when there are repositories to clone
+  if (config.repositories.length > 0 && !token) {
+    throw new Error('GITHUB_TOKEN is required to clone repositories for launch')
+  }
 
   // Step 1: clone each repository
-  if (deps.ensureRepoClone) {
-    for (const repo of config.repositories) {
-      await deps.ensureRepoClone(repo, token, config.ingestion, root)
-    }
-    logger.info('repositories cloned')
+  for (const repo of config.repositories) {
+    await deps.ensureRepoClone(repo, token ?? '', config.ingestion, root)
   }
+  logger.info('repositories cloned')
 
   // Step 2: bring up compose stack
-  if (deps.composeUp) {
-    try {
-      await deps.composeUp(launch, root, deps.composeRunner, allSecrets)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      throw new Error(`compose up failed: ${message}`)
-    }
-    logger.info('compose stack up')
+  try {
+    await deps.composeUp(launch, root, deps.composeRunner, allSecrets)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`compose up failed: ${message}`)
   }
+  logger.info('compose stack up')
 
   // Step 3: save process state immediately after up (so down can clean up even if later steps fail)
-  if (deps.saveProcessState) {
-    const now = deps.now ? deps.now() : new Date().toISOString()
-    const state: ProcessState = {
-      projectName: launch.compose.projectName,
-      composeFiles: launch.compose.files,
-      startedAt: now,
-      readinessUrl: launch.readiness.url,
-    }
-    await deps.saveProcessState(root, state)
-    logger.info('process state saved')
+  const now = deps.now ? deps.now() : new Date().toISOString()
+  const state: ProcessState = {
+    projectName: launch.compose.projectName,
+    composeFiles: launch.compose.files,
+    startedAt: now,
+    readinessUrl: launch.readiness.url,
   }
+  await deps.saveProcessState(root, state)
+  logger.info('process state saved')
 
   // Step 4: wait for readiness
-  if (deps.waitForReadiness) {
-    try {
-      await deps.waitForReadiness(launch.readiness.url, {
-        timeoutSec: launch.readiness.timeoutSec,
-        intervalSec: launch.readiness.intervalSec,
-      })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      throw new Error(`readiness check failed: ${message}`)
-    }
-    logger.info('stack ready')
+  try {
+    await deps.waitForReadiness(launch.readiness.url, {
+      timeoutSec: launch.readiness.timeoutSec,
+      intervalSec: launch.readiness.intervalSec,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`readiness check failed: ${message}`)
   }
+  logger.info('stack ready')
 
   // Step 5: seed database if configured
-  if (launch.seed && deps.seedDatabase) {
+  if (launch.seed) {
     try {
       await deps.seedDatabase(launch.seed, root, deps.composeRunner, allSecrets)
     } catch (err) {

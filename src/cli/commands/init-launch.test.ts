@@ -209,4 +209,33 @@ describe('runInit — launch orchestration (Task 3.1)', () => {
     expect(deps.composeUp).toHaveBeenCalledTimes(1)
     expect(deps.waitForReadiness).toHaveBeenCalledTimes(1)
   })
+
+  it('launch present but a launch dep missing: rejects with clear error, composeUp not called', async () => {
+    const config = { ...makeBaseConfig(), launch: makeLaunch() }
+    const deps = makeDeps({
+      prompt: vi.fn().mockResolvedValue(config),
+      composeUp: undefined,
+    })
+
+    await expect(runInit(tmpRoot, {}, deps)).rejects.toThrow(
+      'init launch requires deps: composeUp, waitForReadiness, seedDatabase, ensureRepoClone, saveProcessState',
+    )
+
+    expect(deps.ensureRepoClone).not.toHaveBeenCalled()
+  })
+
+  it('launch present + repos + no github token: rejects with clear error before any clone/composeUp call', async () => {
+    const config = { ...makeBaseConfig(), launch: makeLaunch() }
+    const deps = makeDeps({
+      prompt: vi.fn().mockResolvedValue(config),
+      secrets: { anthropicApiKey: 'sk-ant-test', githubToken: '', db: {}, targetAuth: {} },
+    })
+
+    await expect(runInit(tmpRoot, {}, deps)).rejects.toThrow(
+      'GITHUB_TOKEN is required to clone repositories for launch',
+    )
+
+    expect(deps.ensureRepoClone).not.toHaveBeenCalled()
+    expect(deps.composeUp).not.toHaveBeenCalled()
+  })
 })
