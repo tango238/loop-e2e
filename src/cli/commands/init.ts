@@ -62,7 +62,7 @@ function buildEnvExample(config: Config): string {
 
 /** Returns the required ignore lines for this config (pure, no I/O). */
 function buildGitignore(config: Config): string[] {
-  const lines = ['.loop-e2e/', '.env']
+  const lines = ['.loop-e2e/', 'repos/', '.env']
   if (config.baseline.commit) {
     lines.push('!.loop-e2e/baseline/')
   }

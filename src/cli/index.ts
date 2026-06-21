@@ -65,13 +65,16 @@ program
   .action(async (opts: { volumes?: boolean }) => {
     const cwd = process.cwd()
 
-    let secrets: import('../domain/types.js').Secrets | undefined
+    let secrets: import('../domain/types.js').Secrets
     try {
       const loaded = await loadConfig(cwd)
       secrets = loaded.secrets
     } catch (err) {
-      process.stderr.write(`Error loading config: ${err instanceof Error ? err.message : String(err)}\n`)
-      process.exit(1)
+      // Config or .env missing/broken — proceed with empty secrets so a recorded stack
+      // can still be torn down (runDown reads .loop-e2e/process.json, not config).
+      // Masking is best-effort on teardown.
+      process.stderr.write(`Warning: config load failed (${err instanceof Error ? err.message : String(err)}); proceeding with empty secrets\n`)
+      secrets = { anthropicApiKey: '', githubToken: '', db: {}, targetAuth: {} }
     }
 
     await runDown(cwd, { volumes: opts.volumes }, {

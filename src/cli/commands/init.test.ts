@@ -92,12 +92,13 @@ describe('runInit', () => {
     expect(envExample).not.toMatch(/=.+/)
   })
 
-  it('writes .gitignore ignoring .loop-e2e/ and .env', async () => {
+  it('writes .gitignore ignoring .loop-e2e/, repos/, and .env', async () => {
     const deps = makeDeps()
     await runInit(tmpRoot, {}, deps)
 
     const gitignore = await readFile(join(tmpRoot, '.gitignore'), 'utf8')
     expect(gitignore).toContain('.loop-e2e/')
+    expect(gitignore).toContain('repos/')
     expect(gitignore).toContain('.env')
   })
 
