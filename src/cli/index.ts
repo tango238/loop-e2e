@@ -4,6 +4,7 @@ import { createGithubClient } from '../services/github/client.js'
 import { ensureLabels } from '../services/github/labels.js'
 import { runInit } from './commands/init.js'
 import { runScenario } from './commands/scenario.js'
+import { runRun } from './commands/run.js'
 import type { InitDeps } from './commands/init.js'
 
 const program = new Command()
@@ -35,6 +36,20 @@ program
   .option('--from <paths...>', 'Additional requirement files to merge into context')
   .action(async (opts: { from?: string[] }) => {
     await runScenario(process.cwd(), { from: opts.from })
+  })
+
+program
+  .command('run')
+  .description('Run E2E loop: collect → diff → report')
+  .option('--target <name>', 'Target name to run against')
+  .action(async (opts: { target?: string }) => {
+    await runRun(process.cwd(), opts, {
+      collect: async (_ctx, _deps) => {
+        throw new Error('Real collect not wired — use programmatic API with deps')
+      },
+      detectDiffs: async () => [],
+      writeReport: async () => {},
+    })
   })
 
 program.parse()
