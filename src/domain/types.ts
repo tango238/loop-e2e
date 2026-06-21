@@ -74,12 +74,17 @@ export type ScenarioStep = {
   expect?: string
 }
 
-// --- Minimal Feedback type (M7 will extend) ---
+// --- Feedback type (M7) ---
 export type Feedback = {
   id: string
-  scenarioId: string
-  status: 'pass' | 'fail' | 'skip'
-  message?: string
+  /** Finding id this feedback targets (diffFinding or verifyFinding) */
+  targetFindingId?: string
+  /** Free-text user comment explaining the correction */
+  userComment: string
+  /** LLM-determined validity verdict: valid = real correction, invalid = misunderstanding */
+  verdict?: 'valid' | 'invalid'
+  /** Scenarios this feedback was applied to */
+  appliedTo: string[]
   createdAt: string
 }
 

@@ -45,6 +45,8 @@ export type CollectDeps = {
 export type CollectResult = {
   structure: SiteStructure
   prior: PriorState
+  /** Raw pages from the crawler — threaded into the verify stage for security/layout analysis */
+  rawPages: RawPage[]
 }
 
 /**
@@ -129,5 +131,5 @@ export async function collect(ctx: RunContext, deps: CollectDeps): Promise<Colle
     logger.info({ runId }, 'First run — baseline saved')
   }
 
-  return { structure, prior }
+  return { structure, prior, rawPages }
 }

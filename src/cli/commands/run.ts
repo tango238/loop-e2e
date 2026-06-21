@@ -93,10 +93,13 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
   // Stage 1: collect
   let structure: SiteStructure = makeEmptyStructure()
   let prior: PriorState = emptyPrior
+  let collectedPages: import('../../domain/types.js').RawPage[] = deps.pages ?? []
   try {
     const result = await collect(runCtx, {})
     structure = result.structure
     prior = result.prior
+    // Thread rawPages from collect into verify — closes the pages-threading gap flagged in M6
+    collectedPages = result.rawPages.length > 0 ? result.rawPages : (deps.pages ?? [])
   } catch (error) {
     logger.error({ error, runId }, 'collect stage failed — continuing with empty structure')
   }
@@ -119,7 +122,7 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
   try {
     verifyFindings = await runVerify({
       llm: llm as never,
-      pages: deps.pages ?? [],
+      pages: collectedPages,
       scenarios: deps.scenarios ?? [],
       config: runCtx.config,
       secrets: runCtx.secrets.db,

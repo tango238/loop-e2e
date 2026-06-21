@@ -215,4 +215,30 @@ describe('pipeline/collect', () => {
     expect(mockCrawl).not.toHaveBeenCalled()
     expect(mockExtract).not.toHaveBeenCalled()
   })
+
+  it('returns rawPages from the crawler in CollectResult for threading into verify', async () => {
+    const { collect } = await import('./collect.js')
+    const rawPage = makeRawPage()
+    const mockStore = makeMockStore(null)
+    const mockCrawl = makeMockCrawl([rawPage])
+    const mockExtract = makeMockExtract()
+
+    const ctx: RunContext = {
+      root,
+      runId: 'run-006',
+      config: makeConfig(),
+      secrets: { db: {}, targetAuth: {}, anthropicApiKey: 'key', githubToken: 'tok' },
+    }
+
+    const result = await collect(ctx, {
+      store: mockStore,
+      crawl: mockCrawl,
+      extractPageInfo: mockExtract,
+      browser: makeFakeBrowser(),
+    })
+
+    // rawPages must be threaded back so verify stages receive real HTML
+    expect(result.rawPages).toHaveLength(1)
+    expect(result.rawPages[0]).toEqual(rawPage)
+  })
 })

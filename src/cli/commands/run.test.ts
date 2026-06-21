@@ -23,7 +23,7 @@ const sampleVerifyFinding: VerifyFinding = {
 }
 
 function makeCollectResult(): CollectResult {
-  return { structure: emptyStructure, prior: emptyPrior }
+  return { structure: emptyStructure, prior: emptyPrior, rawPages: [] }
 }
 
 describe('runRun', () => {

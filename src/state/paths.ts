@@ -8,4 +8,5 @@ export const statePaths = (root: string) => ({
   runs: join(root, STATE_DIR, 'runs'),
   reports: join(root, STATE_DIR, 'reports'),
   feedback: join(root, STATE_DIR, 'feedback'),
+  knownFindings: join(root, STATE_DIR, 'known-findings'),
 })

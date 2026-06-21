@@ -5,6 +5,9 @@ import { ensureLabels } from '../services/github/labels.js'
 import { runInit } from './commands/init.js'
 import { runScenario } from './commands/scenario.js'
 import { runRun } from './commands/run.js'
+import { runFeedback } from './commands/feedback.js'
+import { createLlm } from '../services/llm/client.js'
+import { loadConfig } from '../config/load.js'
 import type { InitDeps } from './commands/init.js'
 
 const program = new Command()
@@ -53,6 +56,40 @@ program
       writeReport: async () => {
         throw new Error('Real writeReport not yet wired (pending M6)')
       },
+    })
+  })
+
+program
+  .command('feedback')
+  .description('Submit feedback on a finding to update known-state and scenarios')
+  .option('--run <runId>', 'Run ID whose report to reference')
+  .option('--finding <index>', 'Zero-based index of the finding to comment on (default: 0)', '0')
+  .option('--comment <text>', 'Free-text comment explaining the correction')
+  .option('--scenario <id>', 'Scenario ID to update if feedback is valid')
+  .option('--scenario-dir <dir>', 'Directory where scenario files live (default: <cwd>/scenarios)')
+  .action(async (opts: { run?: string; finding?: string; comment?: string; scenario?: string; scenarioDir?: string }) => {
+    if (!opts.run || !opts.comment) {
+      process.stderr.write('Error: --run and --comment are required\n')
+      process.exit(1)
+    }
+
+    const cwd = process.cwd()
+    const loaded = await loadConfig(cwd).catch(() => null)
+    const apiKey = process.env['ANTHROPIC_API_KEY'] ?? ''
+    const models = loaded?.config.models ?? {
+      planning: 'claude-opus-4-8',
+      report: 'claude-sonnet-4-6',
+      verification: 'claude-opus-4-8',
+    }
+
+    await runFeedback(cwd, {
+      runId: opts.run,
+      findingIndex: parseInt(opts.finding ?? '0', 10),
+      comment: opts.comment,
+      scenarioId: opts.scenario,
+      scenarioDir: opts.scenarioDir ?? `${cwd}/scenarios`,
+    }, {
+      llm: createLlm(apiKey, models),
     })
   })
 
