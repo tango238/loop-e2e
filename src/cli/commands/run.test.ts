@@ -370,4 +370,64 @@ describe('runRun', () => {
     expect(executeLogin).not.toHaveBeenCalled()
     expect(createPage).not.toHaveBeenCalled()
   })
+
+  // --- isLoginScenario tightening: endsWith false-positive fix (M4 review finding 4.4) ---
+
+  it('does NOT mis-detect a scenario with only /admin-login path as login scenario for loginPath=/login', async () => {
+    // Scenario whose only navigated path is /admin-login — must NOT match loginPath '/login'
+    const adminLoginScenario = {
+      id: 'sc-admin',
+      title: 'Admin panel access',
+      businessFlow: 'Admin accesses admin panel',
+      steps: [
+        { action: 'navigate', target: '/admin-login', expectedOutcome: 'Admin login page shown' },
+        { action: 'fill', target: 'input[name=email]', input: 'admin@example.com', expectedOutcome: 'Email filled' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Admin logged in' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Admin dashboard', assertion: 'URL is /admin' }],
+      expectedDbState: [],
+    }
+
+    const executeLogin = vi.fn()
+    const createPage = vi.fn()
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-admin-login-no-match',
+      scenarios: [adminLoginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-admin-login-no-match',
+        config: {
+          repositories: [],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: {
+          db: {},
+          targetAuth: { USERNAME: 'admin', PASSWORD: 'adminpass' },
+          anthropicApiKey: '',
+          githubToken: '',
+        },
+      },
+      executeLogin,
+      createPage,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+
+    // /admin-login must NOT match loginPath='/login' — executeLogin should NOT be called
+    expect(executeLogin).not.toHaveBeenCalled()
+    expect(createPage).not.toHaveBeenCalled()
+  })
 })

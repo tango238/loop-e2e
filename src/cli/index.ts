@@ -156,12 +156,13 @@ program
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
     try {
       browserCtx = await launchBrowser()
+      const launchedBrowser = browserCtx.browser
       await runRun(cwd, opts, {
         collect: (ctx, _deps) => collect(ctx, {
           store: storeModule,
           crawl,
           extractPageInfo: (lm, raw) => extractPageInfo(lm as Parameters<typeof extractPageInfo>[0], raw),
-          browser: browserCtx!.browser,
+          browser: launchedBrowser,
           llm,
           scenarios,
         }),
@@ -176,7 +177,7 @@ program
         githubClient,
         repo,
         executeLogin: executeLoginScenario,
-        createPage: () => browserCtx!.browser.newPage(),
+        createPage: () => launchedBrowser.newPage(),
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

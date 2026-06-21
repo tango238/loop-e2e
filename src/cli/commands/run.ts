@@ -160,9 +160,7 @@ function isLoginScenario(scenario: Scenario, loginPath?: string): boolean {
     return true
   }
   if (loginPath) {
-    return scenario.steps.some(
-      (s) => s.target === loginPath || s.target.endsWith(loginPath),
-    )
+    return scenario.steps.some((s) => s.target === loginPath)
   }
   return false
 }

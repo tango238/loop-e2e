@@ -150,4 +150,94 @@ describe('executeLoginScenario', () => {
     await executeLoginScenario(page, targetWithoutLoginPath, loginScenario, creds)
     expect(navigatedTo).toContain('/login')
   })
+
+  // --- Stage-specific detail prefix tests (M4 review finding) ---
+
+  it('detail starts with "navigation failed:" on goto failure', async () => {
+    const page = makeFakePage({})
+    ;(page.goto as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('net::ERR_CONNECTION_REFUSED'))
+
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/^navigation failed:/)
+    expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('detail starts with "login form field not found or not fillable:" on fill failure', async () => {
+    const page = makeFakePage({ fillShouldFail: true })
+
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/^login form field not found or not fillable:/)
+    expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('detail starts with "submit failed:" on submit click failure', async () => {
+    const page = makeFakePage({ clickShouldFail: true })
+
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/^submit failed:/)
+    expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('detail starts with "login rejected:" when URL stays on loginPath after submit', async () => {
+    const page = makeFakePage({
+      currentUrl: 'http://localhost:3000/login',
+      pageContent: '<html><body><p class="error">Invalid credentials</p></body></html>',
+    })
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation((_selector: string) => ({
+      fill: vi.fn(async () => {}),
+      click: vi.fn(async () => {}), // URL stays on /login
+    }))
+
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+
+    expect(result.ok).toBe(false)
+    expect(result.detail).toMatch(/^login rejected:/)
+    expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('detail starts with "login succeeded:" on successful login', async () => {
+    const page = makeFakePage({ currentUrl: 'http://localhost:3000/dashboard' })
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation((_selector: string) => ({
+      fill: vi.fn(async () => {}),
+      click: vi.fn(async () => {
+        ;(page.url as ReturnType<typeof vi.fn>).mockReturnValue('http://localhost:3000/dashboard')
+      }),
+    }))
+
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+
+    expect(result.ok).toBe(true)
+    expect(result.detail).toMatch(/^login succeeded:/)
+    expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('navigation failure and credentials-rejected failure have distinct detail prefixes', async () => {
+    // Navigation failure
+    const navPage = makeFakePage({})
+    ;(navPage.goto as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Timeout'))
+    const navResult = await executeLoginScenario(navPage, baseTarget, loginScenario, creds)
+
+    // Credentials rejected
+    const rejPage = makeFakePage({ currentUrl: 'http://localhost:3000/login' })
+    ;(rejPage.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      fill: vi.fn(async () => {}),
+      click: vi.fn(async () => {}),
+    }))
+    const rejResult = await executeLoginScenario(rejPage, baseTarget, loginScenario, creds)
+
+    expect(navResult.ok).toBe(false)
+    expect(rejResult.ok).toBe(false)
+    // Prefixes must differ so triage can distinguish failure modes
+    const navPrefix = navResult.detail.split(':')[0]
+    const rejPrefix = rejResult.detail.split(':')[0]
+    expect(navPrefix).not.toBe(rejPrefix)
+    expect(navResult.detail).not.toContain(creds.password)
+    expect(rejResult.detail).not.toContain(creds.password)
+  })
 })

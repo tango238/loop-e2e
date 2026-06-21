@@ -51,7 +51,7 @@ export async function executeLoginScenario(
   } catch (err) {
     return {
       ok: false,
-      detail: `Failed to navigate to login page: ${sanitizeError(err)}`,
+      detail: `navigation failed: ${sanitizeError(err)}`,
       finalUrl: page.url(),
     }
   }
@@ -68,7 +68,7 @@ export async function executeLoginScenario(
   } catch (err) {
     return {
       ok: false,
-      detail: `Could not fill username field: ${sanitizeError(err)}`,
+      detail: `login form field not found or not fillable: ${sanitizeError(err)}`,
       finalUrl: page.url(),
     }
   }
@@ -81,7 +81,7 @@ export async function executeLoginScenario(
   } catch (err) {
     return {
       ok: false,
-      detail: `Could not fill password field: ${sanitizeError(err)}`,
+      detail: `login form field not found or not fillable: ${sanitizeError(err)}`,
       finalUrl: page.url(),
     }
   }
@@ -94,7 +94,7 @@ export async function executeLoginScenario(
   } catch (err) {
     return {
       ok: false,
-      detail: `Could not submit login form: ${sanitizeError(err)}`,
+      detail: `submit failed: ${sanitizeError(err)}`,
       finalUrl: page.url(),
     }
   }
@@ -106,7 +106,7 @@ export async function executeLoginScenario(
     logger.info({ finalUrl }, 'Login appears to have failed — still on login page')
     return {
       ok: false,
-      detail: `Login failed: URL did not change away from ${loginPath}`,
+      detail: `login rejected: credentials not accepted (still on ${loginPath})`,
       finalUrl,
     }
   }
@@ -114,7 +114,7 @@ export async function executeLoginScenario(
   logger.info({ finalUrl }, 'Login succeeded')
   return {
     ok: true,
-    detail: `Login succeeded — navigated to ${finalUrl}`,
+    detail: `login succeeded: navigated to ${finalUrl}`,
     finalUrl,
   }
 }
