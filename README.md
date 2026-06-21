@@ -44,16 +44,75 @@ loop-e2e scenario --from docs/requirements.md docs/api.md
 
 ### `run`
 
-Runs the 4-stage pipeline:
+Runs the full verification pipeline:
 
-1. **collect** — Crawls the target app with Playwright, extracts structured page info with Claude.
-2. **diff** — Compares current structure against baseline; detects missing transitions, changed items, expectation gaps.
-3. **verify** — Runs 5 verify categories: layout, security, conditional rendering, registered data, error handling.
-4. **report** — Adjudicates each finding with an Opus refutation panel; files GitHub issues for high-confidence bugs; writes `report.json` + `report.md` under `.loop-e2e/reports/<runId>/`.
+```
+prepare (repo refresh → setup hooks) → collect → diff → verify → (login) → report
+```
+
+**Stages:**
+
+1. **prepare** — Runs at the start of every `loop-e2e run` (see [Prepare phase](#prepare-phase) below).
+2. **collect** — Crawls the target app with Playwright, extracts structured page info with Claude.
+3. **diff** — Compares current structure against baseline; detects missing transitions, changed items, expectation gaps.
+4. **verify** — Runs 5 verify categories: layout, security, conditional rendering, registered data, error handling.
+5. **report** — Adjudicates each finding with an Opus refutation panel; files GitHub issues for high-confidence bugs; writes `report.json` + `report.md` under `.loop-e2e/reports/<runId>/`.
 
 ```sh
 loop-e2e run --target staging
+loop-e2e run --skip-prepare     # Skip repo refresh and setup hooks
 ```
+
+### Prepare phase
+
+The prepare phase runs automatically at the start of every `loop-e2e run` (before collect/diff/verify) to ensure repositories are up-to-date and environment-specific configuration is applied. It consists of two parts: **repo refresh** and **setup hooks**.
+
+#### Repository branch refresh
+
+If a repository has a `branch` set in the config, `loop-e2e run` will refresh it to the latest of that branch:
+
+1. Stash any local changes (if the repository is dirty)
+2. Checkout the branch
+3. Pull the latest changes
+4. Restore the stashed changes (WIP)
+
+If a stash conflict occurs, the WIP remains in the stash for manual resolution via `git stash pop`, and the run continues on the latest code.
+
+Example config with branch refresh:
+
+```yaml
+repositories:
+  - name: frontend
+    label: Frontend
+    url: https://github.com/org/frontend
+    role: frontend
+    audience: user
+    branch: main           # Refresh to latest of main on each run
+```
+
+#### Setup hooks
+
+After repos are refreshed, setup hooks run in order. These are shell commands (specified with `command`) that run from the workspace root as `sh -c`. Use setup hooks for environment-specific preparation (CORS config, API endpoints, database setup, etc.). The first failure aborts the run; secrets are masked in logs and error messages.
+
+Example config with setup hooks:
+
+```yaml
+setup:
+  - command: "docker exec myproject-app-1 sh -c 'sed -i \"s#^FRONT_URL=.*#FRONT_URL=https://dev.example.com:3100#\" /var/www/.env && php artisan config:clear'"
+  - command: "docker exec myproject-db-1 psql -U postgres -d myapp -c \"UPDATE config SET env_mode = 'test' WHERE id = 1;\""
+```
+
+Environment-specific preparation (database state, API mocking, auth setup, etc.) belongs in your own config file, not in loop-e2e core — loop-e2e only provides the generic shell command mechanism.
+
+#### Skipping prepare
+
+To skip the entire prepare phase (useful for fast iteration during debugging):
+
+```sh
+loop-e2e run --skip-prepare
+```
+
+This bypasses both repo refresh and setup hooks.
 
 ### `feedback`
 

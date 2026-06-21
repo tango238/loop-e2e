@@ -49,3 +49,32 @@ describe('LaunchSchema', () => {
     } })).toThrow()
   })
 })
+
+describe('branch + setup schema', () => {
+  const base = {
+    repositories: [{ name: 'web', label: 'frontend-user', url: 'https://github.com/o/web', role: 'frontend', audience: 'user' }],
+    targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'none' } }],
+    databases: [],
+    schedule: { intervalMinutes: 60 },
+    scenarioDir: 'scenarios',
+    github: { labels: { ready: 'Ready', autoDetect: 'Auto-Detect' } },
+  }
+
+  it('accepts optional repo branch and setup commands', () => {
+    const cfg = ConfigSchema.parse({
+      ...base,
+      repositories: [{ ...base.repositories[0], branch: 'main' }],
+      setup: [{ command: 'echo hi' }, { command: 'docker compose exec -T app true' }],
+    })
+    expect(cfg.repositories[0].branch).toBe('main')
+    expect(cfg.setup?.length).toBe(2)
+  })
+  it('omits branch and setup when not provided', () => {
+    const cfg = ConfigSchema.parse(base)
+    expect(cfg.repositories[0].branch).toBeUndefined()
+    expect(cfg.setup).toBeUndefined()
+  })
+  it('rejects a setup entry with empty command', () => {
+    expect(() => ConfigSchema.parse({ ...base, setup: [{ command: '' }] })).toThrow()
+  })
+})
