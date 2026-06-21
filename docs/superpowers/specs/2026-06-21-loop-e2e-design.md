@@ -28,7 +28,17 @@
 
 | 領域 | 採用 | 備考 |
 |------|------|------|
-| LLM | **Claude (Anthropic API)** `@anthropic-ai/sdk` | シナリオ生成・ページ構造化・差分/検証の判断・フィードバック検証に使用。最新 Opus/Sonnet を既定。 |
+| LLM | **Claude (Anthropic API)** `@anthropic-ai/sdk` | シナリオ生成・ページ構造化・差分/検証の判断・フィードバック検証に使用。モデルは役割で使い分け（下表）。 |
+
+### 2.1 モデル使い分け方針
+
+| 役割 | モデル | 対象処理 |
+|------|--------|----------|
+| 計画・分析・判断 | **Opus**（精度重視） | シナリオ生成、ページ構造化、差分判定、検証判断、フィードバック検証 |
+| レポート生成 | **Sonnet**（コスト重視） | 収集済み情報からのレポート本文生成 |
+| 反証検証（品質ゲート） | **Opus** | レポート生成後、各フィンディングを**反証（refute）**して妥当性を確定。耐えたものだけ確定扱い |
+
+`config.models = { planning, report, verification }` で各既定モデルIDを上書き可能（既定: planning/verification=Opus, report=Sonnet）。
 | サイト読込/操作 | **Playwright（ヘッドレス）** | レンダリング後DOM・スクリーンショット取得、フォーム入力・ログイン自動操作。 |
 | DB検証 | **PostgreSQL + MySQL（必須）** | `pg` / `mysql2`。対象システムにより接続を切替。アダプタで抽象化。 |
 | 定期実行 | **設定値の保存のみ＋外部cron** | CLIは `run` を単発実行。 |
@@ -49,7 +59,9 @@ TargetEnv            { name, baseUrl, auth?: AuthConfig }
 AuthConfig           { loginPath, usernameEnv, passwordEnv, strategy: 'form'|'basic'|'none' }
 DbConnection         { name, type: 'postgres'|'mysql', host, port, database, user, passwordEnv }
 
-Config               { repositories[], targets[], databases[], schedule, scenarioDir, github }
+Config               { repositories[], targets[], databases[], schedule, scenarioDir, github,
+                       baseline: { commit: boolean },   // 既定 false（非コミット）
+                       models: { planning, report, verification } }
 
 PageInfo             { url, title, description, meta{}, displayItems[], inputItems[],
                        expectations[],   // この画面に期待すること
@@ -68,6 +80,10 @@ DiffFinding          { kind: 'transition'|'displayItem'|'inputItem'|'expectation
                        severity, expected, actual, location }
 VerifyFinding        { category: 'layout'|'security'|'conditional'|'registered-data'|'error-handling',
                        severity, title, detail, evidence }
+FindingVerdict       { classification: 'bug'|'unnecessary'|'uncertain',  // 反証検証の確定結果
+                       confidence, rationale, refutationAttempted: true }
+// classification ∈ {bug, unnecessary} かつ反証を耐えたもの → 自動Issue起票
+// classification = uncertain → レポートのみ（ユーザー報告）
 Report               { runId, startedAt, target, diffFindings[], verifyFindings[],
                        siteStructureRef, summary }
 Feedback             { id, targetFindingId?, userComment, verdict?, appliedTo[] }
@@ -97,7 +113,7 @@ Feedback             { id, targetFindingId?, userComment, verdict?, appliedTo[] 
         └─ *.feedback.yaml
 ```
 
-機密は必ず `.env`、`loop-e2e.config.yaml` には参照名（`passwordEnv` 等）のみ保持。`.env` と `.loop-e2e/` は `.gitignore` 対象（baseline は運用方針により共有可。MVPは非コミット既定）。
+機密は必ず `.env`、`loop-e2e.config.yaml` には参照名（`passwordEnv` 等）のみ保持。`.env` と `.loop-e2e/` は既定で `.gitignore` 対象（**baseline 非コミットが既定**）。`config.baseline.commit=true` のときのみ `.loop-e2e/baseline/` を git 管理対象に含め（`.gitignore` から除外）、チームで差分基準を共有可能にする。
 
 ---
 
@@ -168,9 +184,10 @@ src/
 - 冪等性: 既存ラベル/ファイルがあればスキップ（再実行可能）
 
 ### 6.2 `scenario` — シナリオ生成
-- 入力: 要件/ユースケース（`--from <path>` の要件ファイル/ディレクトリ、または対象リポジトリの README/docs）
-- 処理:
-  1. Claude が要件・ユースケースから**業務フロー**を洗い出す
+- 入力（自動収集）: 対象リポジトリの **README / docs / ソースコード / Git ログ** を自動読込して要件・ユースケースを抽出。加えて任意で `--from <path>` の専用要件ファイル/ディレクトリを併用。
+  - 収集はリポジトリ単位。`role`/`audience` ラベルで文脈付け。ソースコードは規模が大きいため要約・関連抽出してからLLMへ渡す（トークン制御）。Git ログは直近の変更履歴から業務フローの変化を補足。
+- 処理（Opus）:
+  1. Claude が要件・ユースケース・コード・履歴から**業務フロー**を洗い出す
   2. 各フローを検証用**シナリオ**（手順 `steps`）に変換
   3. 各シナリオの**想定結果**（`expectedResults`）と**想定DB状態**（`expectedDbState`、後段のDB検証に使用）を生成
 - 出力: `<scenarioDir>/*.scenario.yaml`（zod検証）。既存シナリオは上書き前に差分提示。
@@ -201,9 +218,12 @@ src/
 - 出力: `VerifyFinding[]`（カテゴリ・重大度付き）
 
 **3-4 レポート（report）**
-- 結果を `reports/<runId>/report.md` ＋ `report.json` に保存
-- 差分結果・サイト構造を整理し、`baseline/site-structure.json` を更新（次回差分の基準）
-- 問題（一定重大度以上）があれば GitHub Issue を起票し `Auto-Detect` ラベル付与。重複起票防止のため既存Issue（タイトル/フィンガープリント）と突合。
+- レポート本文生成（**Sonnet**）: 収集済みの差分・検証結果からレポートを生成。
+- **反証検証（Opus・品質ゲート）**: 各フィンディングに対し Opus が反証（refute）を試み `FindingVerdict` を確定。
+  - `classification ∈ {bug, unnecessary}` かつ反証を耐えたもの = **明確にバグ/不要な処理** → GitHub Issue を起票し `Auto-Detect` ラベル付与。重複起票防止のため fingerprint で既存Issueと突合。
+  - `classification = uncertain`（判断不能） → **自動起票せず**、レポートに「ユーザー確認要」として記載。
+- 結果を `reports/<runId>/report.md` ＋ `report.json` に保存。
+- 差分結果・サイト構造を整理し `baseline/site-structure.json` を更新（次回差分の基準）。`config.baseline.commit=true` の場合のみ baseline を git 管理対象に含める運用とする。
 
 ### 6.4 `feedback` — フィードバック
 - **ユーザーフィードバック取込**: レポート/フィンディングIDを参照しコメント付与（CLI対話 or `*.feedback.yaml`）
@@ -242,8 +262,12 @@ src/
 
 ---
 
-## 10. 未決事項 / 確認したい点
-- `scenario` の要件入力ソース: 専用要件ファイル指定を既定とするか、リポジトリのREADME/docs自動読込も含めるか。
-- baseline を git 管理対象にするか（チームでの差分基準共有可否）。
-- Issue 起票の重大度しきい値（どのレベルから自動起票するか）。
-- Claude のモデル既定値（精度重視 Opus / コスト重視 Sonnet の使い分け方針）。
+## 10. 決定事項（2026-06-21 確定）
+- **要件入力ソース**: 対象リポジトリの README/docs/ソースコード/Git ログを自動読込。任意で `--from` 専用ファイルを併用。
+- **baseline の git 管理**: 既定は非コミット。`config.baseline.commit=true` で git 管理に切替可。
+- **Issue 自動起票**: 反証検証（Opus）で「明確にバグ/不要な処理」と確定したもののみ起票。判断不能はレポートでユーザー報告。
+- **モデル使い分け**: 計画・分析・判断＝Opus、レポート生成＝Sonnet、反証検証＝Opus（§2.1）。
+
+### 残課題（実装中に詰める）
+- ソースコード自動読込のトークン制御（要約/関連抽出の具体手法と上限）。
+- 反証検証の `confidence` しきい値の初期値チューニング。
