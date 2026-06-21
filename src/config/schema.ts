@@ -6,6 +6,7 @@ export const RepositorySchema = z.object({
   url: z.string().url(),
   role: z.enum(['frontend', 'backend']),
   audience: z.enum(['user', 'admin']),
+  branch: z.string().optional(),
 })
 
 export const AuthSchema = z.object({
@@ -79,6 +80,7 @@ export const ConfigSchema = z.object({
   ingestion: IngestionSchema,
   refutation: RefutationSchema,
   launch: LaunchSchema.optional(),
+  setup: z.array(z.object({ command: z.string().min(1) })).optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>
