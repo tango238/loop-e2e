@@ -20,6 +20,15 @@ const makeFakeClient = (textContent: string) => ({
 })
 
 describe('LLM client', () => {
+  it('throws a clear error when no api key and no injected client', () => {
+    expect(() => createLlm('', models)).toThrow(/ANTHROPIC_API_KEY is required/)
+  })
+
+  it('does not require an api key when a client is injected', () => {
+    const fakeClient = makeFakeClient('{}')
+    expect(() => createLlm('', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })).not.toThrow()
+  })
+
   it('resolves planning role to planning model id', async () => {
     const fakeClient = makeFakeClient('hello')
     const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })

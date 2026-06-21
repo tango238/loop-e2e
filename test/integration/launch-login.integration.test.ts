@@ -101,7 +101,7 @@ function makeSecrets() {
     anthropicApiKey: 'sk-ant-test',
     githubToken: 'ghp_test',
     db: { DB_PASS: 'dbpassword' },
-    targetAuth: { APP_PASS: 'apppassword' },
+    targetAuth: { APP_USER: 'admin@example.com', APP_PASS: 'apppassword' },
   }
 }
 
@@ -223,11 +223,13 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
       ANTHROPIC_API_KEY: process.env['ANTHROPIC_API_KEY'],
       GITHUB_TOKEN: process.env['GITHUB_TOKEN'],
       DB_PASS: process.env['DB_PASS'],
+      APP_USER: process.env['APP_USER'],
       APP_PASS: process.env['APP_PASS'],
     }
     process.env['ANTHROPIC_API_KEY'] = 'test-key'
     process.env['GITHUB_TOKEN'] = 'ghp_test'
     process.env['DB_PASS'] = 'dbpassword'
+    process.env['APP_USER'] = 'admin@example.com'
     process.env['APP_PASS'] = 'apppassword'
 
     try {
