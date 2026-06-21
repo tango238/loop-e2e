@@ -109,3 +109,49 @@ export type TargetEnv = {
     password?: string
   }
 }
+
+// --- M5 diff/report types ---
+
+export type DiffFinding = {
+  kind: 'transition' | 'displayItem' | 'inputItem' | 'expectation-gap'
+  severity: 'high' | 'medium' | 'low'
+  expected: string
+  actual: string
+  location: string
+}
+
+export type VerifyFinding = {
+  category: 'layout' | 'security' | 'conditional' | 'registered-data' | 'error-handling'
+  severity: 'high' | 'medium' | 'low'
+  title: string
+  detail: string
+  evidence: string
+}
+
+export type RefuterVote = {
+  lens: 'correctness' | 'security' | 'intentionality'
+  refuted: boolean
+  classification: 'bug' | 'unnecessary' | 'uncertain'
+  confidence: number
+  rationale: string
+}
+
+export type FindingVerdict = {
+  classification: 'bug' | 'unnecessary' | 'uncertain'
+  confidence: number
+  confirmedCount: number
+  panelSize: number
+  votes: RefuterVote[]
+  rationale: string
+}
+
+export type Report = {
+  runId: string
+  startedAt: string
+  target: string
+  diffFindings: DiffFinding[]
+  verifyFindings: VerifyFinding[]
+  verdicts: Record<string, FindingVerdict>
+  siteStructureRef: string
+  summary: string
+}
