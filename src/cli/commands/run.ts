@@ -1,7 +1,10 @@
 import { logger } from '../../util/logger.js'
-import type { RunContext, DiffFinding, VerifyFinding, SiteStructure, PriorState } from '../../domain/types.js'
+import type { RunContext, DiffFinding, VerifyFinding, SiteStructure, PriorState, RawPage } from '../../domain/types.js'
 import type { CollectResult } from '../../pipeline/collect.js'
 import type { WriteReportDeps } from '../../pipeline/report.js'
+import type { RunVerifyDeps } from '../../pipeline/verify/index.js'
+import type { Scenario } from '../../scenario/schema.js'
+import type { DbDriverOptions } from '../../services/db/index.js'
 
 export type RunOpts = {
   target?: string
@@ -11,21 +14,29 @@ type CollectFn = (ctx: RunContext, deps: object) => Promise<CollectResult>
 type DetectDiffsFn = (deps: {
   current: SiteStructure
   baseline: SiteStructure | null
-  scenarios: import('../../scenario/schema.js').Scenario[]
+  scenarios: Scenario[]
   llm: import('../../services/llm/client.js').Llm
 }) => Promise<DiffFinding[]>
+type RunVerifyFn = (deps: RunVerifyDeps) => Promise<VerifyFinding[]>
 type WriteReportFn = (root: string, runId: string, deps: WriteReportDeps) => Promise<void>
 
 export type RunDeps = {
   collect: CollectFn
   detectDiffs: DetectDiffsFn
+  runVerify: RunVerifyFn
   writeReport: WriteReportFn
   /** Injected for deterministic runId in tests; defaults to ISO timestamp */
   clock?: () => string
   /** Injected RunContext for tests; if omitted, loaded from config */
   ctx?: RunContext
-  /** Optional LLM for diff/report stages; required in production */
+  /** Optional LLM for diff/report/verify stages; required in production */
   llm?: import('../../services/llm/client.js').Llm
+  /** Pages from the collect stage, passed to verify; empty in tests unless injected */
+  pages?: RawPage[]
+  /** Scenarios for the verify stage */
+  scenarios?: Scenario[]
+  /** Injectable DB driver factories for verify tests */
+  dbDrivers?: DbDriverOptions
 }
 
 function makeEmptyStructure(): SiteStructure {
@@ -43,12 +54,12 @@ const emptyPrior: PriorState = {
 }
 
 /**
- * Orchestrates the run pipeline: collect → diff → (verify stub) → report.
+ * Orchestrates the run pipeline: collect → diff → verify → report.
  * Each stage is wrapped in try/catch so partial failures still produce a report.
  * All external dependencies are injectable for deterministic testing.
  */
 export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promise<void> {
-  const { collect, detectDiffs, writeReport, clock, ctx: injectedCtx, llm } = deps
+  const { collect, detectDiffs, runVerify, writeReport, clock, ctx: injectedCtx, llm } = deps
   const runId = clock ? clock() : new Date().toISOString().replace(/[:.]/g, '-')
 
   // In tests, ctx is injected. In production, it would be loaded from config.
@@ -103,8 +114,20 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
     logger.error({ error, runId }, 'diff stage failed — continuing with empty findings')
   }
 
-  // Stage 3: verify stub (M6 fills this)
-  const verifyFindings: VerifyFinding[] = []
+  // Stage 3: verify — run all 5 categories, resilient to per-category failure
+  let verifyFindings: VerifyFinding[] = []
+  try {
+    verifyFindings = await runVerify({
+      llm: llm as never,
+      pages: deps.pages ?? [],
+      scenarios: deps.scenarios ?? [],
+      config: runCtx.config,
+      secrets: runCtx.secrets.db,
+      dbDrivers: deps.dbDrivers,
+    })
+  } catch (error) {
+    logger.error({ error, runId }, 'verify stage failed — continuing with empty findings')
+  }
 
   // Stage 4: report (always runs)
   try {
