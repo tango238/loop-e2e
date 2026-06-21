@@ -30,7 +30,7 @@ const defaultGitRunner: GitRunner = async (file, args, cwd) => {
 }
 
 /**
- * Ensures a shallow clone of `repo.url` exists at `.loop-e2e/repos/<name>`.
+ * Ensures a shallow clone of `repo.url` exists at `repos/<name>`.
  * - If the directory does not exist: clones with `--depth cloneDepth`.
  * - If the directory already exists: runs `git fetch`.
  * The GitHub token is embedded in the URL as `https://<token>@github.com/...`
@@ -45,7 +45,7 @@ export async function ensureRepoClone(
   root: string,
   gitRunner: GitRunner = defaultGitRunner,
 ): Promise<string> {
-  const localPath = join(statePaths(root).base, 'repos', repo.name)
+  const localPath = join(root, 'repos', repo.name)
   const authenticatedUrl = embedToken(repo.url, token)
   const maskedUrl = maskSecrets(authenticatedUrl, [token])
 

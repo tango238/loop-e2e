@@ -76,7 +76,7 @@ describe('ensureRepoClone', () => {
 
   it('fetches when repo directory already exists', async () => {
     // Pre-create the repo directory
-    const repoDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const repoDir = join(root, 'repos', repo.name)
     await mkdir(repoDir, { recursive: true })
 
     const runner = makeRunner(false)
@@ -89,7 +89,7 @@ describe('ensureRepoClone', () => {
   })
 
   it('passes --depth with cloneDepth to fetch', async () => {
-    const repoDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const repoDir = join(root, 'repos', repo.name)
     await mkdir(repoDir, { recursive: true })
 
     const runner = makeRunner(false)
@@ -102,7 +102,7 @@ describe('ensureRepoClone', () => {
   it('does not include raw token in cwd or args when fetching (token masking)', async () => {
     // We simply assert that the clone URL (which contains token) is not
     // passed as an arg in fetch path — fetch uses the existing remote
-    const repoDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const repoDir = join(root, 'repos', repo.name)
     await mkdir(repoDir, { recursive: true })
 
     const tokenLeaks: string[] = []
@@ -126,7 +126,7 @@ describe('ensureRepoClone', () => {
   it('returns the correct local path', async () => {
     const runner = makeRunner(true)
     const localPath = await ensureRepoClone(repo, TOKEN, ingestion, root, runner)
-    expect(localPath).toBe(join(root, '.loop-e2e', 'repos', repo.name))
+    expect(localPath).toBe(join(root, 'repos', repo.name))
   })
 
   it('masks token in error thrown from clone path', async () => {
@@ -145,7 +145,7 @@ describe('ensureRepoClone', () => {
 
   it('masks token in error thrown from fetch path', async () => {
     // Pre-create the repo directory so the fetch branch is taken
-    const repoDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const repoDir = join(root, 'repos', repo.name)
     await mkdir(repoDir, { recursive: true })
 
     const errorRunner: GitRunner = async (_file, args) => {
