@@ -10,7 +10,7 @@ const pexec = promisify(execFile)
 const defaultGitRunner: ComposeRunner = (cmd, args, opts) =>
   pexec(cmd, args, opts) as Promise<{ stdout: string; stderr: string }>
 
-export type RefreshDeps = { gitRunner?: ComposeRunner; secrets?: string[] }
+export type RefreshDeps = { gitRunner?: ComposeRunner; secrets?: string[]; gitToken?: string }
 
 /**
  * Refresh a cloned repo to the latest of `branch`:
@@ -25,6 +25,7 @@ export async function refreshRepo(
 ): Promise<void> {
   const git = deps.gitRunner ?? defaultGitRunner
   const secrets = deps.secrets ?? []
+  const gitToken = deps.gitToken ?? ''
   const cwd = join(root, 'repos', repo.name)
 
   const run = async (args: string[]): Promise<string> => {
@@ -42,10 +43,11 @@ export async function refreshRepo(
     await git(file, args, cloneCwd ? { cwd: cloneCwd } : undefined)
   }
 
-  // Ensure the clone exists (secrets[0] is the git auth token by convention).
+  // Ensure the clone exists — pass the github token explicitly (NOT secrets[0]).
+  // The secrets array is purely for masking error messages.
   await ensureRepoClone(
     repo,
-    secrets[0] ?? '',
+    gitToken,
     { cloneDepth: 50, tokenBudgetPerRepo: 120_000, gitLogCount: 50 },
     root,
     cloneGitRunner,

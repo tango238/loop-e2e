@@ -249,7 +249,7 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
       ...Object.values(runCtx.secrets.targetAuth),
     ].filter(Boolean) as string[]
     logger.info({ root }, 'prepare phase starting')
-    await deps.prepare(runCtx.config, root, { secrets: allSecrets })
+    await deps.prepare(runCtx.config, root, { secrets: allSecrets, gitToken: runCtx.secrets.githubToken })
     logger.info({ root }, 'prepare phase complete')
   }
 

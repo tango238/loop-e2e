@@ -567,7 +567,7 @@ describe('runRun', () => {
     expect(deps.writeReport).toHaveBeenCalledOnce()
   })
 
-  it('calls prepare with the loaded config, root, and secrets array', async () => {
+  it('calls prepare with the loaded config, root, secrets array, and gitToken', async () => {
     const ctx = {
       root: '/tmp/root',
       runId: 'run-prepare-args',
@@ -594,12 +594,14 @@ describe('runRun', () => {
     let capturedConfig: unknown = 'not-set'
     let capturedRoot: unknown = 'not-set'
     let capturedSecrets: unknown = 'not-set'
+    let capturedGitToken: unknown = 'not-set'
 
     const deps = {
-      prepare: vi.fn().mockImplementation(async (config: unknown, root: unknown, prepareDeps: { secrets?: unknown }) => {
+      prepare: vi.fn().mockImplementation(async (config: unknown, root: unknown, prepareDeps: { secrets?: unknown; gitToken?: unknown }) => {
         capturedConfig = config
         capturedRoot = root
         capturedSecrets = prepareDeps.secrets
+        capturedGitToken = prepareDeps.gitToken
       }),
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
@@ -618,6 +620,8 @@ describe('runRun', () => {
     expect(secrets).toContain('gh-token')
     expect(secrets).toContain('db-secret')
     expect(secrets).toContain('auth-token')
+    // gitToken must be the github token specifically, NOT the anthropic key
+    expect(capturedGitToken).toBe('gh-token')
   })
 
   it('propagates prepare failure and aborts the run (does not swallow)', async () => {

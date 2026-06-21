@@ -79,7 +79,7 @@ describe('pipeline/prepare', () => {
       runSetupHooks: mockRunSetupHooks as unknown as typeof runSetupHooks,
     })
 
-    expect(mockRefreshRepo).toHaveBeenCalledWith(repo, 'main', '/some/root', { secrets: undefined })
+    expect(mockRefreshRepo).toHaveBeenCalledWith(repo, 'main', '/some/root', { secrets: undefined, gitToken: undefined })
   })
 
   it('calls all refreshRepo before runSetupHooks (strict order)', async () => {
@@ -151,7 +151,30 @@ describe('pipeline/prepare', () => {
       expect.any(Object),
       'main',
       '/root',
-      { secrets },
+      { secrets, gitToken: undefined },
+    )
+  })
+
+  it('threads gitToken through to refreshRepo (not secrets[0])', async () => {
+    const { prepare } = await import('./prepare.js')
+    const config = makeConfig({
+      repositories: [makeRepo('repo-a', 'main')],
+    })
+    const secrets = ['anthropic-key', 'other-secret']
+    const gitToken = 'gh-token-explicit'
+
+    await prepare(config, '/root', {
+      refreshRepo: mockRefreshRepo as unknown as typeof refreshRepo,
+      runSetupHooks: mockRunSetupHooks as unknown as typeof runSetupHooks,
+      secrets,
+      gitToken,
+    })
+
+    expect(mockRefreshRepo).toHaveBeenCalledWith(
+      expect.any(Object),
+      'main',
+      '/root',
+      { secrets, gitToken },
     )
   })
 

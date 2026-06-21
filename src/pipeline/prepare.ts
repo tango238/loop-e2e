@@ -8,6 +8,7 @@ export type PrepareDeps = {
   refreshRepo?: typeof refreshRepo
   runSetupHooks?: typeof runSetupHooks
   secrets?: string[]
+  gitToken?: string
 }
 
 /**
@@ -25,12 +26,12 @@ export async function prepare(
 ): Promise<void> {
   const refresh = deps.refreshRepo ?? defaultRefreshRepo
   const setupHooks = deps.runSetupHooks ?? defaultRunSetupHooks
-  const { secrets } = deps
+  const { secrets, gitToken } = deps
 
   // Step ①: refresh repos with a branch set, in order
   for (const repo of config.repositories) {
     if (repo.branch !== undefined) {
-      await refresh(repo, repo.branch, root, { secrets })
+      await refresh(repo, repo.branch, root, { secrets, gitToken })
     }
   }
 
