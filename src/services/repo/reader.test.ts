@@ -52,9 +52,9 @@ describe('collectRequirements', () => {
 
     // gitRunner: simulates clone by noting the target dir path
     // We need to make ensureRepoClone return our tempRepoDir.
-    // Since the real ensureRepoClone computes the path as `root/.loop-e2e/repos/name`,
+    // Since the real ensureRepoClone computes the path as `root/repos/name`,
     // we pre-create that dir with our files.
-    const expectedCloneDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const expectedCloneDir = join(root, 'repos', repo.name)
     await mkdir(expectedCloneDir, { recursive: true })
     // Copy files
     for (const [rel, content] of Object.entries({
@@ -93,7 +93,7 @@ describe('collectRequirements', () => {
     const fromFile = join(tmpdir(), 'extra-requirements.md')
     await writeFile(fromFile, '# Extra Requirements\nMust handle payments')
 
-    const expectedCloneDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const expectedCloneDir = join(root, 'repos', repo.name)
     await mkdir(expectedCloneDir, { recursive: true })
     await writeFile(join(expectedCloneDir, 'src', 'index.ts'), 'export {}', 'utf8').catch(
       async () => {
@@ -123,7 +123,7 @@ describe('collectRequirements', () => {
 
   it('populates docs array with docs directory files', async () => {
     root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
-    const expectedCloneDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const expectedCloneDir = join(root, 'repos', repo.name)
     await mkdir(join(expectedCloneDir, 'docs'), { recursive: true })
     await writeFile(join(expectedCloneDir, 'docs', 'api.md'), '# API Docs')
     await writeFile(join(expectedCloneDir, 'README.md'), '# Readme')
@@ -148,7 +148,7 @@ describe('collectRequirements', () => {
 
   it('docs files do not appear in codeSummary (no double-counting)', async () => {
     root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
-    const expectedCloneDir = join(root, '.loop-e2e', 'repos', repo.name)
+    const expectedCloneDir = join(root, 'repos', repo.name)
     await mkdir(join(expectedCloneDir, 'docs'), { recursive: true })
     await mkdir(join(expectedCloneDir, 'src'), { recursive: true })
     const docContent = 'UNIQUE_DOC_SENTINEL_XYZ: This belongs only in docs[]'
