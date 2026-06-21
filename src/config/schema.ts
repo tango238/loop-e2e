@@ -50,6 +50,23 @@ const RefutationSchema = z.object({
     .default(['correctness', 'security', 'intentionality']),
 }).default({ panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness', 'security', 'intentionality'] })
 
+const LaunchSchema = z.object({
+  compose: z.object({
+    files: z.array(z.string().min(1)).min(1),
+    projectName: z.string().min(1),
+    envFile: z.string().optional(),
+  }),
+  readiness: z.object({
+    url: z.string().url(),
+    timeoutSec: z.number().int().positive().default(180),
+    intervalSec: z.number().int().positive().default(3),
+  }),
+  seed: z.object({ command: z.string().min(1) }).optional(),
+  targetName: z.string().min(1),
+})
+
+export type Launch = z.infer<typeof LaunchSchema>
+
 export const ConfigSchema = z.object({
   repositories: z.array(RepositorySchema).min(1),
   targets: z.array(TargetSchema).min(1),
@@ -61,6 +78,7 @@ export const ConfigSchema = z.object({
   models: ModelsSchema,
   ingestion: IngestionSchema,
   refutation: RefutationSchema,
+  launch: LaunchSchema.optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>

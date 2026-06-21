@@ -10,6 +10,15 @@ const valid = {
   github: { labels: { ready: 'Ready', autoDetect: 'Auto-Detect' } },
 }
 
+const baseValid = {
+  repositories: [{ name: 'web', label: 'frontend-user', url: 'https://github.com/o/web', role: 'frontend', audience: 'user' }],
+  targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form', loginPath: '/login', usernameEnv: 'APP_USER', passwordEnv: 'APP_PASS' } }],
+  databases: [],
+  schedule: { intervalMinutes: 60 },
+  scenarioDir: 'scenarios',
+  github: { labels: { ready: 'Ready', autoDetect: 'Auto-Detect' } },
+}
+
 describe('ConfigSchema', () => {
   it('accepts a valid config', () => { expect(ConfigSchema.parse(valid)).toMatchObject(valid) })
   it('rejects invalid db type', () => {
@@ -17,5 +26,26 @@ describe('ConfigSchema', () => {
   })
   it('rejects intervalMinutes < 1', () => {
     expect(() => ConfigSchema.parse({ ...valid, schedule: { intervalMinutes: 0 } })).toThrow()
+  })
+})
+
+describe('LaunchSchema', () => {
+  it('accepts a valid launch config', () => {
+    const cfg = ConfigSchema.parse({ ...baseValid, launch: {
+      compose: { files: ['docker-compose.yml'], projectName: 'e2e' },
+      readiness: { url: 'http://localhost:3000/login' },
+      seed: { command: 'docker compose exec -T backend npm run seed:test' },
+      targetName: 'local',
+    } })
+    expect(cfg.launch?.readiness.timeoutSec).toBe(180) // default
+    expect(cfg.launch?.readiness.intervalSec).toBe(3)  // default
+  })
+  it('omits launch when not provided', () => {
+    expect(ConfigSchema.parse(baseValid).launch).toBeUndefined()
+  })
+  it('rejects launch with empty compose.files', () => {
+    expect(() => ConfigSchema.parse({ ...baseValid, launch: {
+      compose: { files: [], projectName: 'e2e' }, readiness: { url: 'http://x' }, targetName: 'local',
+    } })).toThrow()
   })
 })
