@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { readYaml, writeYaml } from '../util/fs.js'
 import { statePaths } from './paths.js'
@@ -49,9 +49,17 @@ export async function loadLatestReport(root: string): Promise<SiteStructure | nu
   } catch {
     return null
   }
-  const yamlFiles = files.filter((f) => f.endsWith('.yaml')).sort()
+  const yamlFiles = files.filter((f) => f.endsWith('.yaml'))
   if (yamlFiles.length === 0) return null
-  const latest = yamlFiles[yamlFiles.length - 1]
+  // Sort by file modification time so ordering is robust to arbitrary runId formats
+  const withMtimes = await Promise.all(
+    yamlFiles.map(async (f) => {
+      const { mtimeMs } = await stat(join(paths.runs, f))
+      return { f, mtimeMs }
+    }),
+  )
+  withMtimes.sort((a, b) => a.mtimeMs - b.mtimeMs)
+  const latest = withMtimes[withMtimes.length - 1].f
   return readYaml<SiteStructure>(join(paths.runs, latest))
 }
 

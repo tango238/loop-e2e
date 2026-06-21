@@ -1,6 +1,6 @@
-import { join } from 'node:path'
 import { ensureDir } from '../../util/fs.js'
 import { logger } from '../../util/logger.js'
+import { screenshot } from './snapshot.js'
 import type { RawPage, TargetEnv, Scenario } from '../../domain/types.js'
 
 // Minimal shape used from Playwright's Browser/Page to keep the module unit-testable
@@ -101,11 +101,12 @@ export async function crawlWithBrowser(
   }
 
   const screenshotFilename = `${slugify(url)}.png`
-  const screenshotPath = join(screenshotDir, screenshotFilename)
+  let screenshotPath = ''
   try {
-    await page.screenshot({ path: screenshotPath, fullPage: true })
+    screenshotPath = await screenshot(page, screenshotDir, screenshotFilename)
   } catch {
     // screenshot may not work in all test environments
+    screenshotPath = `${screenshotDir}/${screenshotFilename}`
   }
 
   const rawPage: RawPage = { url, title, html, meta, screenshotPath }

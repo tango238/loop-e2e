@@ -9,6 +9,7 @@ import type {
   TargetEnv,
   Scenario,
 } from '../domain/types.js'
+import type { BrowserLike } from '../services/browser/crawler.js'
 
 // --- Injectable dependency interfaces ---
 
@@ -21,7 +22,7 @@ type StoreApi = {
 }
 
 type CrawlFn = (
-  browser: unknown,
+  browser: BrowserLike,
   target: TargetEnv,
   scenarios: Scenario[],
   screenshotDir: string,
@@ -33,8 +34,8 @@ export type CollectDeps = {
   store: StoreApi
   crawl: CrawlFn
   extractPageInfo: ExtractPageInfoFn
-  /** Optional browser instance; if not provided, collect will not crawl (test convenience) */
-  browser?: unknown
+  /** Optional browser instance; if null/omitted, crawling is skipped (returns empty page list) */
+  browser?: BrowserLike | null
   /** Optional LLM instance; if not provided, extractPageInfo won't be called with one */
   llm?: unknown
   /** Screenshot output directory (default: <root>/.loop-e2e/runs/<runId>/screenshots) */
@@ -99,8 +100,12 @@ export async function collect(ctx: RunContext, deps: CollectDeps): Promise<Colle
       : undefined,
   }
 
-  // 3. Crawl
-  const rawPages = await crawl(browser, target, [], screenshotDir)
+  // 3. Crawl — skip if no browser is available (returns empty page list)
+  // Note: scenarios is hardcoded to [] here — a known placeholder; the `run` command
+  // will thread real scenarios through in a later milestone (M4/M5).
+  const rawPages: RawPage[] = browser !== null
+    ? await crawl(browser, target, [], screenshotDir)
+    : []
   logger.info({ pageCount: rawPages.length }, 'Crawl complete')
 
   // 4. Extract PageInfo for each page

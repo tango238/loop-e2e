@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -44,11 +44,6 @@ describe('state/store', () => {
       const result = await loadBaseline(root)
       expect(result).toBeNull()
     })
-
-    it('returns null when baseline file is missing', async () => {
-      const result = await loadBaseline(root)
-      expect(result).toBeNull()
-    })
   })
 
   describe('saveBaseline + loadBaseline round-trip', () => {
@@ -78,14 +73,32 @@ describe('state/store', () => {
       expect(loaded).toEqual(structure)
     })
 
-    it('loads most recent run when multiple exist', async () => {
+    it('loads most recent run when multiple exist (lexicographic order)', async () => {
       const first = makeSiteStructure('run1')
       const second = makeSiteStructure('run2')
       await saveRunStructure(root, 'run-001', first)
-      // Small delay to ensure filesystem ordering
       await saveRunStructure(root, 'run-002', second)
       const loaded = await loadLatestReport(root)
       expect(loaded).toEqual(second)
+    })
+
+    it('selects latest run by mtime, not filename order', async () => {
+      const { statePaths } = await import('./paths.js')
+      const paths = statePaths(root)
+
+      // Write 'run-zzz' first (lexicographically last) then 'run-aaa' (lexicographically first)
+      // but set mtime so 'run-aaa' is the most recently modified — it should win
+      const older = makeSiteStructure('older')
+      const newer = makeSiteStructure('newer')
+      await saveRunStructure(root, 'run-zzz', older)
+      await saveRunStructure(root, 'run-aaa', newer)
+
+      // Backdate run-zzz to 1 hour ago so run-aaa is definitively newer by mtime
+      const oneHourAgo = new Date(Date.now() - 3600_000)
+      await utimes(join(paths.runs, 'run-zzz.yaml'), oneHourAgo, oneHourAgo)
+
+      const loaded = await loadLatestReport(root)
+      expect(loaded).toEqual(newer)
     })
   })
 

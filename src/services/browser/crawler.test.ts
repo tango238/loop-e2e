@@ -99,10 +99,9 @@ describe('crawler (unit, fake browser)', () => {
 // Gated: skips if chromium is not available
 
 describe('crawler (E2E, real browser)', () => {
-  it.skip('crawls a local static HTML server and returns valid RawPage', async () => {
-    // This test is marked skip-by-default; run manually after:
-    //   pnpm exec playwright install chromium
-    // The skip guard is deliberate — offline/CI environments won't have chromium.
+  it.runIf(process.env.RUN_E2E === '1')('crawls a local static HTML server and returns valid RawPage', async () => {
+    // Gated: runs only when RUN_E2E=1 (e.g. `RUN_E2E=1 pnpm test`).
+    // Requires chromium: `pnpm exec playwright install chromium`
     const http = await import('node:http')
     const { mkdtemp, rm } = await import('node:fs/promises')
     const { tmpdir } = await import('node:os')

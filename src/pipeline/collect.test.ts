@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { RunContext, RawPage, PageInfo, SiteStructure } from '../domain/types.js'
 import type { Config } from '../config/schema.js'
+import type { BrowserLike } from '../services/browser/crawler.js'
 
 // --- Shared fixture data ---
 
@@ -46,6 +47,13 @@ const makeSiteStructure = (): SiteStructure => ({
 })
 
 // --- Mock factories ---
+
+/** Minimal BrowserLike stub — the real crawl fn is mocked, so this just needs to be non-null */
+const makeFakeBrowser = (): BrowserLike => ({
+  newPage: vi.fn().mockResolvedValue({}),
+  close: vi.fn().mockResolvedValue(undefined),
+})
+
 const makeMockStore = (baseline: SiteStructure | null = null) => ({
   loadBaseline: vi.fn().mockResolvedValue(baseline),
   saveBaseline: vi.fn().mockResolvedValue(undefined),
@@ -90,6 +98,7 @@ describe('pipeline/collect', () => {
       store: mockStore,
       crawl: mockCrawl,
       extractPageInfo: mockExtract,
+      browser: makeFakeBrowser(),
     })
 
     // Returns the assembled structure
@@ -129,6 +138,7 @@ describe('pipeline/collect', () => {
       store: mockStore,
       crawl: mockCrawl,
       extractPageInfo: mockExtract,
+      browser: makeFakeBrowser(),
     })
 
     // Prior state includes the existing baseline
@@ -154,7 +164,7 @@ describe('pipeline/collect', () => {
       secrets: { db: {}, targetAuth: {}, anthropicApiKey: 'key', githubToken: 'tok' },
     }
 
-    await collect(ctx, { store: mockStore, crawl: mockCrawl, extractPageInfo: mockExtract })
+    await collect(ctx, { store: mockStore, crawl: mockCrawl, extractPageInfo: mockExtract, browser: makeFakeBrowser() })
 
     expect(mockCrawl).toHaveBeenCalledTimes(1)
     const [, target] = mockCrawl.mock.calls[0]
@@ -175,8 +185,34 @@ describe('pipeline/collect', () => {
       secrets: { db: {}, targetAuth: {}, anthropicApiKey: 'key', githubToken: 'tok' },
     }
 
-    await collect(ctx, { store: mockStore, crawl: mockCrawl, extractPageInfo: mockExtract })
+    await collect(ctx, { store: mockStore, crawl: mockCrawl, extractPageInfo: mockExtract, browser: makeFakeBrowser() })
 
     expect(mockExtract).toHaveBeenCalledTimes(2)
+  })
+
+  it('skips crawl and returns empty pages when browser is null', async () => {
+    const { collect } = await import('./collect.js')
+    const mockStore = makeMockStore(null)
+    const mockCrawl = makeMockCrawl()
+    const mockExtract = makeMockExtract()
+
+    const ctx: RunContext = {
+      root,
+      runId: 'run-005',
+      config: makeConfig(),
+      secrets: { db: {}, targetAuth: {}, anthropicApiKey: 'key', githubToken: 'tok' },
+    }
+
+    const result = await collect(ctx, {
+      store: mockStore,
+      crawl: mockCrawl,
+      extractPageInfo: mockExtract,
+      browser: null,
+    })
+
+    // With no browser, crawl is skipped and pages is empty
+    expect(result.structure.pages).toHaveLength(0)
+    expect(mockCrawl).not.toHaveBeenCalled()
+    expect(mockExtract).not.toHaveBeenCalled()
   })
 })
