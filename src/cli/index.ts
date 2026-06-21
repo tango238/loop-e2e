@@ -3,12 +3,18 @@ import { Command } from 'commander'
 import { createGithubClient } from '../services/github/client.js'
 import { ensureLabels } from '../services/github/labels.js'
 import { runInit } from './commands/init.js'
+import { runDown } from './commands/down.js'
 import { runScenario } from './commands/scenario.js'
 import { runRun } from './commands/run.js'
 import { runFeedback } from './commands/feedback.js'
 import { createLlm } from '../services/llm/client.js'
 import { loadConfig } from '../config/load.js'
 import { logger } from '../util/logger.js'
+import { composeUp, composeDown, defaultComposeRunner } from '../services/compose/compose.js'
+import { waitForReadiness } from '../services/compose/readiness.js'
+import { seedDatabase } from '../services/seed/seed.js'
+import { ensureRepoClone } from '../services/repo/clone.js'
+import { saveProcessState, loadProcessState, clearProcessState } from '../state/process.js'
 import type { InitDeps } from './commands/init.js'
 
 const program = new Command()
@@ -18,8 +24,18 @@ program
   .command('init')
   .description('Initialise a project for loop-e2e')
   .action(async () => {
+    const cwd = process.cwd()
     const githubToken = process.env['GITHUB_TOKEN']
     const githubClient = githubToken ? createGithubClient(githubToken) : null
+
+    // Attempt to load secrets for launch orchestration; non-fatal if absent at init time
+    let secrets: import('../domain/types.js').Secrets | undefined
+    try {
+      const loaded = await loadConfig(cwd)
+      secrets = loaded.secrets
+    } catch {
+      // Config may not exist yet during first init — launch steps will use empty secrets
+    }
 
     const realDeps: InitDeps = {
       prompt: async (_root, _opts) => {
@@ -29,9 +45,42 @@ program
       },
       ensureLabels,
       githubClient,
+      composeUp,
+      waitForReadiness: (url, opts) => waitForReadiness(url, opts, (u) => fetch(u).then((r) => ({ status: r.status }))),
+      seedDatabase,
+      ensureRepoClone: (repo, token, ingestion, root) => ensureRepoClone(repo, token, ingestion, root),
+      saveProcessState,
+      secrets,
+      now: () => new Date().toISOString(),
+      composeRunner: defaultComposeRunner,
     }
 
-    await runInit(process.cwd(), {}, realDeps)
+    await runInit(cwd, {}, realDeps)
+  })
+
+program
+  .command('down')
+  .description('Stop the local docker stack started by init')
+  .option('--volumes', 'Also remove docker volumes')
+  .action(async (opts: { volumes?: boolean }) => {
+    const cwd = process.cwd()
+
+    let secrets: import('../domain/types.js').Secrets | undefined
+    try {
+      const loaded = await loadConfig(cwd)
+      secrets = loaded.secrets
+    } catch (err) {
+      process.stderr.write(`Error loading config: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+
+    await runDown(cwd, { volumes: opts.volumes }, {
+      loadProcessState,
+      composeDown,
+      clearProcessState,
+      secrets,
+      composeRunner: defaultComposeRunner,
+    })
   })
 
 program
