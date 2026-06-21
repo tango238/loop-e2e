@@ -5,7 +5,7 @@ import type { Launch } from '../../config/schema.js'
 
 const pexec = promisify(execFile)
 export type ComposeRunner = (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<{ stdout: string; stderr: string }>
-const defaultRunner: ComposeRunner = (cmd, args, opts) => pexec(cmd, args, opts)
+const defaultRunner: ComposeRunner = (cmd, args, opts) => pexec(cmd, args, opts) as Promise<{ stdout: string; stderr: string }>
 
 function baseArgs(projectName: string, files: string[], envFile?: string): string[] {
   const args = ['compose', '-p', projectName]
