@@ -3,3 +3,4 @@ node_modules/
 .loop-e2e/
 dist/
 .superpowers/
+coverage/
