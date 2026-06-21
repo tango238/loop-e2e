@@ -4,6 +4,7 @@ import type {
   RawPage,
   PageInfo,
   SiteStructure,
+  Transition,
   PriorState,
   Feedback,
   TargetEnv,
@@ -116,14 +117,23 @@ export async function collect(ctx: RunContext, deps: CollectDeps): Promise<Colle
     rawPages.map((raw) => extractPageInfo(llm, raw)),
   )
 
-  // 5. Assemble SiteStructure
+  // 5. Build transitions from the visit sequence (each consecutive pair is a transition)
+  const transitions: Transition[] = rawPages.length > 1
+    ? rawPages.slice(1).map((page, i) => ({
+        fromUrl: rawPages[i]!.url,
+        toUrl: page.url,
+        trigger: 'navigate',
+      }))
+    : []
+
+  // 6. Assemble SiteStructure
   const structure: SiteStructure = {
     generatedAt: new Date().toISOString(),
     pages,
-    transitions: [],
+    transitions,
   }
 
-  // 6. Persist
+  // 7. Persist
   await store.saveRunStructure(root, runId, structure)
   logger.debug({ runId }, 'Run structure saved')
 

@@ -17,6 +17,8 @@ export type PageLike = {
     fill: (value: string) => Promise<void>
     click: () => Promise<void>
   }
+  /** Optional: close the page after capture to release resources */
+  close?: () => Promise<void>
 }
 
 export type BrowserLike = {
@@ -69,29 +71,27 @@ function buildMetaCollector(): () => Record<string, string> {
   }
 }
 
-/**
- * Core crawl function that accepts an injectable browser-like object.
- * This design allows unit tests to pass a fake browser with no real Playwright.
- */
-export async function crawlWithBrowser(
-  browser: BrowserLike,
-  target: TargetEnv,
-  _scenarios: Scenario[],
-  screenshotDir: string,
-): Promise<RawPage[]> {
-  await ensureDir(screenshotDir)
-  const page = await browser.newPage()
+/** Returns true if the step target looks like a navigable URL path or absolute URL */
+function isNavigationTarget(t: string): boolean {
+  return t.startsWith('/') || t.startsWith('http://') || t.startsWith('https://')
+}
 
-  // Authenticate if needed
-  if (target.auth?.strategy === 'form') {
-    await performFormLogin(page, target.baseUrl, target.auth)
+/** Resolves a step target to an absolute URL */
+function resolveUrl(stepTarget: string, baseUrl: string): string {
+  if (stepTarget.startsWith('http://') || stepTarget.startsWith('https://')) {
+    return stepTarget
   }
+  return `${baseUrl.replace(/\/$/, '')}${stepTarget}`
+}
 
-  // Crawl the base URL
-  await page.goto(target.baseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+/**
+ * Captures a single page at the given URL: navigates, waits, collects metadata, takes screenshot.
+ */
+async function capturePage(page: PageLike, url: string, screenshotDir: string): Promise<RawPage> {
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   await page.waitForLoadState('networkidle')
 
-  const url = page.url()
+  const finalUrl = page.url()
   const title = await page.title()
   const html = await page.content()
   let meta: Record<string, string> = {}
@@ -101,18 +101,79 @@ export async function crawlWithBrowser(
     // evaluate may not work in all test environments; default to empty
   }
 
-  const screenshotFilename = `${slugify(url)}.png`
+  const screenshotFilename = `${slugify(finalUrl)}.png`
   let screenshotPath = ''
   try {
     screenshotPath = await screenshot(page, screenshotDir, screenshotFilename)
   } catch {
-    // screenshot may not work in all test environments
     screenshotPath = `${screenshotDir}/${screenshotFilename}`
   }
 
-  const rawPage: RawPage = { url, title, html, meta, screenshotPath }
-  logger.debug({ url, title }, 'Crawled page')
-  return [rawPage]
+  logger.debug({ url: finalUrl, title }, 'Crawled page')
+  return { url: finalUrl, title, html, meta, screenshotPath }
+}
+
+/**
+ * Core crawl function that accepts an injectable browser-like object.
+ * This design allows unit tests to pass a fake browser with no real Playwright.
+ *
+ * Crawls the base URL first, then follows navigation targets from scenario steps
+ * to build a multi-page RawPage array. Deduplicates by URL.
+ */
+export async function crawlWithBrowser(
+  browser: BrowserLike,
+  target: TargetEnv,
+  scenarios: Scenario[],
+  screenshotDir: string,
+): Promise<RawPage[]> {
+  await ensureDir(screenshotDir)
+
+  const visitedUrls = new Set<string>()
+  const rawPages: RawPage[] = []
+
+  const page = await browser.newPage()
+
+  try {
+    // Authenticate if needed
+    if (target.auth?.strategy === 'form') {
+      await performFormLogin(page, target.baseUrl, target.auth)
+    }
+
+    // Always capture the base URL first
+    const basePage = await capturePage(page, target.baseUrl, screenshotDir)
+    visitedUrls.add(basePage.url)
+    rawPages.push(basePage)
+
+    // Follow scenario step navigation targets to build multi-page crawl
+    for (const scenario of scenarios) {
+      for (const step of scenario.steps) {
+        if (!isNavigationTarget(step.target)) continue
+
+        const targetUrl = resolveUrl(step.target, target.baseUrl)
+        if (visitedUrls.has(targetUrl)) continue
+
+        try {
+          const stepPage = await capturePage(page, targetUrl, screenshotDir)
+          visitedUrls.add(targetUrl)
+          rawPages.push(stepPage)
+          logger.debug(
+            { from: rawPages[rawPages.length - 2]?.url, to: stepPage.url, trigger: step.action },
+            'Followed scenario transition',
+          )
+        } catch (err) {
+          logger.warn(
+            { err, targetUrl, scenario: scenario.id },
+            'Failed to navigate to scenario step target — skipping',
+          )
+        }
+      }
+    }
+  } finally {
+    // Close page to release browser resources
+    await page.close?.().catch(() => {})
+  }
+
+  return rawPages
 }
 
 /**

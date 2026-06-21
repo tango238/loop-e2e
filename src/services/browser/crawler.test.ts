@@ -93,6 +93,47 @@ describe('crawler (unit, fake browser)', () => {
     // form login: should have navigated to login path
     expect(formPage.goto).toHaveBeenCalledWith('https://example.com/login', expect.any(Object))
   })
+
+  it('2-step scenario: produces ≥2 pages', async () => {
+    const { crawlWithBrowser } = await import('./crawler.js')
+
+    // Fake page whose reported URL changes on each goto call
+    let currentUrl = 'https://example.com/'
+    const stepPage = makeFakePage({
+      goto: vi.fn().mockImplementation(async (url: string) => { currentUrl = url }),
+      url: vi.fn().mockImplementation(() => currentUrl),
+      title: vi.fn().mockResolvedValue('Some Page'),
+    })
+    const browser = makeFakeBrowser(stepPage)
+
+    const target: TargetEnv = {
+      name: 'test-target',
+      baseUrl: 'https://example.com',
+      auth: { strategy: 'none' },
+    }
+
+    const scenario = {
+      id: 'sc-1',
+      title: 'Multi step',
+      businessFlow: 'navigate multi-step',
+      steps: [
+        { action: 'navigate', target: 'https://example.com/', expectedOutcome: 'Home loads' },
+        { action: 'navigate', target: 'https://example.com/dashboard', expectedOutcome: 'Dashboard loads' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Dashboard visible', assertion: 'page title present' }],
+      expectedDbState: [],
+    }
+
+    const pages = await crawlWithBrowser(
+      browser as unknown as Parameters<typeof crawlWithBrowser>[0],
+      target,
+      [scenario],
+      '/tmp',
+    )
+
+    // Base URL + /dashboard = 2 pages
+    expect(pages.length).toBeGreaterThanOrEqual(2)
+  })
 })
 
 // --- E2E test: real Playwright against a local static server ---
