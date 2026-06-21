@@ -53,14 +53,24 @@ export async function ensureRepoClone(
 
   if (!exists) {
     logger.info({ repo: repo.name, url: maskedUrl }, 'Cloning repository')
-    await gitRunner(
-      'git',
-      ['clone', '--depth', String(ingestion.cloneDepth), authenticatedUrl, localPath],
-    )
+    try {
+      await gitRunner(
+        'git',
+        ['clone', '--depth', String(ingestion.cloneDepth), authenticatedUrl, localPath],
+      )
+    } catch (err) {
+      const masked = maskSecrets(String((err as Error)?.message ?? err), [token])
+      throw new Error(`git clone failed: ${masked}`)
+    }
     logger.info({ repo: repo.name }, 'Clone complete')
   } else {
     logger.info({ repo: repo.name }, 'Repository exists — fetching latest')
-    await gitRunner('git', ['fetch', '--depth', String(ingestion.cloneDepth)], localPath)
+    try {
+      await gitRunner('git', ['fetch', '--depth', String(ingestion.cloneDepth)], localPath)
+    } catch (err) {
+      const masked = maskSecrets(String((err as Error)?.message ?? err), [token])
+      throw new Error(`git fetch failed: ${masked}`)
+    }
     logger.info({ repo: repo.name }, 'Fetch complete')
   }
 

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { join } from 'node:path'
 import { readdir } from 'node:fs/promises'
-import { readYaml, writeYaml } from '../util/fs.js'
+import { ensureDir, readYaml, writeYaml } from '../util/fs.js'
 
 // --- Step schema ---
 export const ScenarioStepSchema = z.object({
@@ -74,6 +74,7 @@ export async function loadScenarios(dir: string): Promise<Scenario[]> {
  * Ensures the directory exists before writing.
  */
 export async function saveScenario(dir: string, scenario: Scenario): Promise<void> {
+  await ensureDir(dir)
   const path = join(dir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`)
   await writeYaml(path, scenario)
 }

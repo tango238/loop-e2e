@@ -89,6 +89,7 @@ export async function runScenario(
   logger.info('scenario command complete')
 }
 
+// NOTE: positional/line-by-line diff — may be misleading when array elements shift position.
 function buildDiff(prev: Scenario, next: Scenario): string {
   const prevJson = JSON.stringify(prev, null, 2)
   const nextJson = JSON.stringify(next, null, 2)

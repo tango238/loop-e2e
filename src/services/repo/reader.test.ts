@@ -145,4 +145,38 @@ describe('collectRequirements', () => {
 
     await rm(root, { recursive: true, force: true })
   })
+
+  it('docs files do not appear in codeSummary (no double-counting)', async () => {
+    root = await mkdtemp(join(tmpdir(), 'loop-e2e-reader-root-'))
+    const expectedCloneDir = join(root, '.loop-e2e', 'repos', repo.name)
+    await mkdir(join(expectedCloneDir, 'docs'), { recursive: true })
+    await mkdir(join(expectedCloneDir, 'src'), { recursive: true })
+    const docContent = 'UNIQUE_DOC_SENTINEL_XYZ: This belongs only in docs[]'
+    await writeFile(join(expectedCloneDir, 'docs', 'guide.md'), docContent)
+    await writeFile(join(expectedCloneDir, 'src', 'index.ts'), 'export const x = 1')
+    await writeFile(join(expectedCloneDir, 'README.md'), '# Readme')
+
+    // Use a real LLM mock that passes source content through (simulates summarize passthrough)
+    const llm: Llm = { complete: vi.fn(async () => 'summarized source') } as unknown as Llm
+
+    const gitRunner: GitRunner = async () => {}
+    const gitLogRunner: GitLogRunner = async () => ''
+
+    const contexts = await collectRequirements([repo], {
+      llm,
+      token: 'fake-token',
+      root,
+      ingestion,
+      gitRunner,
+      gitLogRunner,
+    })
+
+    const ctx = contexts[0]
+    // docs field must include the doc content
+    expect(ctx?.docs.some((d) => d.includes('UNIQUE_DOC_SENTINEL_XYZ'))).toBe(true)
+    // codeSummary must NOT contain the doc content
+    expect(ctx?.codeSummary).not.toContain('UNIQUE_DOC_SENTINEL_XYZ')
+
+    await rm(root, { recursive: true, force: true })
+  })
 })

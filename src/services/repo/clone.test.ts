@@ -128,4 +128,36 @@ describe('ensureRepoClone', () => {
     const localPath = await ensureRepoClone(repo, TOKEN, ingestion, root, runner)
     expect(localPath).toBe(join(root, '.loop-e2e', 'repos', repo.name))
   })
+
+  it('masks token in error thrown from clone path', async () => {
+    const errorRunner: GitRunner = async (_file, args) => {
+      if (args[0] === 'clone') {
+        throw new Error(`fatal: Authentication failed for 'https://${TOKEN}@github.com/acme/my-app'`)
+      }
+    }
+    await expect(
+      ensureRepoClone(repo, TOKEN, ingestion, root, errorRunner),
+    ).rejects.toSatisfy((err: unknown) => {
+      const msg = (err as Error).message
+      return !msg.includes(TOKEN)
+    })
+  })
+
+  it('masks token in error thrown from fetch path', async () => {
+    // Pre-create the repo directory so the fetch branch is taken
+    const repoDir = join(root, '.loop-e2e', 'repos', repo.name)
+    await mkdir(repoDir, { recursive: true })
+
+    const errorRunner: GitRunner = async (_file, args) => {
+      if (args[0] === 'fetch') {
+        throw new Error(`fatal: could not read from remote: token=${TOKEN}`)
+      }
+    }
+    await expect(
+      ensureRepoClone(repo, TOKEN, ingestion, root, errorRunner),
+    ).rejects.toSatisfy((err: unknown) => {
+      const msg = (err as Error).message
+      return !msg.includes(TOKEN)
+    })
+  })
 })
