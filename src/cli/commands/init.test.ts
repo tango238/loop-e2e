@@ -128,4 +128,61 @@ describe('runInit', () => {
     deps.ensureLabels = vi.fn().mockResolvedValue(undefined)
     await expect(runInit(tmpRoot, {}, deps)).resolves.toBeUndefined()
   })
+
+  // Important 1 — null github client must not crash
+  it('completes without throwing when githubClient is null and does not call ensureLabels', async () => {
+    const deps = makeDeps({ githubClient: null })
+    await expect(runInit(tmpRoot, {}, deps)).resolves.toBeUndefined()
+    expect(deps.ensureLabels).not.toHaveBeenCalled()
+  })
+
+  it('completes without throwing when githubClient is absent (undefined)', async () => {
+    const { githubClient: _omit, ...depsWithoutClient } = makeDeps()
+    await expect(runInit(tmpRoot, {}, depsWithoutClient)).resolves.toBeUndefined()
+    expect(depsWithoutClient.ensureLabels).not.toHaveBeenCalled()
+  })
+
+  // Important 2 — .gitignore must preserve existing user content on re-run
+  it('preserves existing .gitignore user content and appends only missing loop-e2e lines', async () => {
+    const { writeFile: writeFileFs } = await import('node:fs/promises')
+    const gitignorePath = join(tmpRoot, '.gitignore')
+    // Pre-create .gitignore with custom user content
+    await writeFileFs(gitignorePath, 'node_modules/\ndist/\n', 'utf8')
+
+    const deps = makeDeps()
+    await runInit(tmpRoot, {}, deps)
+
+    const gitignore = await readFile(gitignorePath, 'utf8')
+    // Custom content preserved
+    expect(gitignore).toContain('node_modules/')
+    expect(gitignore).toContain('dist/')
+    // Required loop-e2e lines present
+    expect(gitignore).toContain('.loop-e2e/')
+    expect(gitignore).toContain('.env')
+  })
+
+  it('does not duplicate .gitignore lines on a second run', async () => {
+    const deps = makeDeps()
+    await runInit(tmpRoot, {}, deps)
+
+    // Second run
+    const deps2 = makeDeps()
+    await runInit(tmpRoot, {}, deps2)
+
+    const gitignore = await readFile(join(tmpRoot, '.gitignore'), 'utf8')
+    // Count occurrences — each required line should appear exactly once
+    const loopCount = (gitignore.match(/^\.loop-e2e\/$/gm) ?? []).length
+    const envCount = (gitignore.match(/^\.env$/gm) ?? []).length
+    expect(loopCount).toBe(1)
+    expect(envCount).toBe(1)
+  })
+
+  // Minor 4 — buildEnvExample must include usernameEnv
+  it('writes .env.example with usernameEnv from target auth', async () => {
+    const deps = makeDeps()
+    await runInit(tmpRoot, {}, deps)
+
+    const envExample = await readFile(join(tmpRoot, '.env.example'), 'utf8')
+    expect(envExample).toContain('APP_USER=')
+  })
 })

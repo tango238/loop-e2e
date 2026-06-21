@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { writeFile } from 'node:fs/promises'
+import { writeFile, readFile } from 'node:fs/promises'
 import { saveConfig } from '../../config/save.js'
 import { ensureDir } from '../../util/fs.js'
 import { logger } from '../../util/logger.js'
@@ -32,6 +32,9 @@ function buildEnvExample(config: Config): string {
   }
 
   for (const target of config.targets) {
+    if (target.auth?.usernameEnv && !keys.includes(target.auth.usernameEnv)) {
+      keys.push(target.auth.usernameEnv)
+    }
     if (target.auth?.passwordEnv && !keys.includes(target.auth.passwordEnv)) {
       keys.push(target.auth.passwordEnv)
     }
@@ -40,14 +43,24 @@ function buildEnvExample(config: Config): string {
   return keys.map((k) => `${k}=`).join('\n') + '\n'
 }
 
-function buildGitignore(config: Config): string {
+/** Returns the required ignore lines for this config (pure, no I/O). */
+function buildGitignore(config: Config): string[] {
   const lines = ['.loop-e2e/', '.env']
-
   if (config.baseline.commit) {
     lines.push('!.loop-e2e/baseline/')
   }
+  return lines
+}
 
-  return lines.join('\n') + '\n'
+/** Merges required lines into existing .gitignore content, preserving user lines. */
+function mergeGitignore(existing: string, required: string[]): string {
+  const existingLines = existing.split('\n')
+  const missing = required.filter((line) => !existingLines.includes(line))
+  if (missing.length === 0) {
+    return existing
+  }
+  const base = existing.endsWith('\n') ? existing : existing + '\n'
+  return base + missing.join('\n') + '\n'
 }
 
 export async function runInit(root: string, opts: InitOpts, deps: InitDeps): Promise<void> {
@@ -74,20 +87,35 @@ export async function runInit(root: string, opts: InitOpts, deps: InitDeps): Pro
     }
     logger.info('directories created')
 
-    // Write .gitignore
+    // Write .gitignore — preserve existing user content, append only missing lines
     const gitignorePath = join(root, '.gitignore')
-    await writeFile(gitignorePath, buildGitignore(config), 'utf8')
+    const requiredLines = buildGitignore(config)
+    let gitignoreContent: string
+    try {
+      const existing = await readFile(gitignorePath, 'utf8')
+      gitignoreContent = mergeGitignore(existing, requiredLines)
+    } catch {
+      // File does not exist — create it
+      gitignoreContent = requiredLines.join('\n') + '\n'
+    }
+    await writeFile(gitignorePath, gitignoreContent, 'utf8')
     logger.info('.gitignore written')
 
-    // Ensure labels on each repo
+    // Ensure labels on each repo — skip entirely when github client is absent
     const githubClient = deps.githubClient ?? null
-    for (const repo of config.repositories) {
-      const parsed = parseRepoUrl(repo.url)
-      await deps.ensureLabels(
-        githubClient,
-        { owner: parsed.owner, name: parsed.name },
-        { ready: config.github.labels.ready, autoDetect: config.github.labels.autoDetect },
-      )
+    if (githubClient === null) {
+      if (config.repositories.length > 0) {
+        logger.warn('GITHUB_TOKEN not set; skipping label creation')
+      }
+    } else {
+      for (const repo of config.repositories) {
+        const parsed = parseRepoUrl(repo.url)
+        await deps.ensureLabels(
+          githubClient,
+          { owner: parsed.owner, name: parsed.name },
+          { ready: config.github.labels.ready, autoDetect: config.github.labels.autoDetect },
+        )
+      }
     }
 
     logger.info('init complete')
