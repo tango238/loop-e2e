@@ -1,6 +1,6 @@
 import { maskSecrets } from '../../util/mask.js'
 import type { DbAdapter, Row } from './adapter.js'
-import type { DbSchema } from '../../config/schema.js'
+import type { DbConfig } from '../../config/schema.js'
 
 /** Minimal interface for a pg Pool — injectable for unit tests */
 export interface PgPool {
@@ -37,7 +37,7 @@ function defaultPgPoolCtor(opts: {
  * @param poolCtor - injectable Pool factory (tests pass a fake)
  */
 export function createPostgresAdapter(
-  conn: DbSchema,
+  conn: DbConfig,
   password: string,
   poolCtor: PgPoolCtor = defaultPgPoolCtor,
 ): DbAdapter {

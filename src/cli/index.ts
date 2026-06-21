@@ -53,6 +53,9 @@ program
       detectDiffs: async () => {
         throw new Error('Real detectDiffs not yet wired (pending M6)')
       },
+      runVerify: async () => {
+        throw new Error('Real runVerify not yet wired (pending M6)')
+      },
       writeReport: async () => {
         throw new Error('Real writeReport not yet wired (pending M6)')
       },

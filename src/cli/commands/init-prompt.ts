@@ -45,7 +45,7 @@ export async function promptConfig(): Promise<Config> {
     message: 'GitHub repository URLs (comma-separated)',
     placeholder: 'https://github.com/org/frontend,https://github.com/org/backend',
     validate(value) {
-      if (!value.trim()) return 'At least one repository URL is required'
+      if (!value?.trim()) return 'At least one repository URL is required'
     },
   })
   if (p.isCancel(repoUrlsRaw)) {
@@ -69,7 +69,7 @@ export async function promptConfig(): Promise<Config> {
     message: 'Target base URL',
     placeholder: 'http://localhost:3000',
     validate(value) {
-      if (!value.trim()) return 'A target URL is required'
+      if (!value?.trim()) return 'A target URL is required'
     },
   })
   if (p.isCancel(targetUrlRaw)) {

@@ -1,5 +1,5 @@
 import type { DbAdapter } from './adapter.js'
-import type { DbSchema } from '../../config/schema.js'
+import type { DbConfig } from '../../config/schema.js'
 import { createPostgresAdapter, type PgPool } from './postgres.js'
 import { createMysqlAdapter, type MysqlConnection } from './mysql.js'
 
@@ -24,7 +24,7 @@ export type DbDriverOptions = {
  * @param drivers - injectable driver factories (tests only)
  */
 export function createDbAdapter(
-  conn: DbSchema,
+  conn: DbConfig,
   password: string,
   drivers: DbDriverOptions = {},
 ): DbAdapter {

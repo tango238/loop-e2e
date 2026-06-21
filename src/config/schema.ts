@@ -64,4 +64,5 @@ export const ConfigSchema = z.object({
 })
 
 export type Config = z.infer<typeof ConfigSchema>
+export type DbConfig = z.infer<typeof DbSchema>
 export const CONFIG_FILENAME = 'loop-e2e.config.yaml'

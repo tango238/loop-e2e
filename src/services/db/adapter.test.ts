@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createDbAdapter } from './index.js'
-import type { DbSchema } from '../../config/schema.js'
+import type { DbConfig } from '../../config/schema.js'
 import type { PgPool } from './postgres.js'
 import type { MysqlConnection } from './mysql.js'
 import type { Row } from './adapter.js'
 
-const pgConn: DbSchema = {
+const pgConn: DbConfig = {
   name: 'pg-test',
   type: 'postgres',
   host: 'localhost',
@@ -15,7 +15,7 @@ const pgConn: DbSchema = {
   passwordEnv: 'DB_PASS',
 }
 
-const mysqlConn: DbSchema = {
+const mysqlConn: DbConfig = {
   name: 'mysql-test',
   type: 'mysql',
   host: 'localhost',

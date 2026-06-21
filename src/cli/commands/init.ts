@@ -17,7 +17,7 @@ export interface InitDeps {
   /** Collects config from the user (prompts or test mock) */
   prompt: (root: string, opts: InitOpts) => Promise<Config>
   /** Creates/skips labels on a single repo */
-  ensureLabels: (client: GithubClient | null, repo: RepoRef, labels: LabelConfig) => Promise<void>
+  ensureLabels: (client: GithubClient, repo: RepoRef, labels: LabelConfig) => Promise<void>
   /** Optional pre-built github client; if absent, ensureLabels receives null */
   githubClient?: GithubClient | null
 }

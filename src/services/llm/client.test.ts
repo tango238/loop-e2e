@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { z } from 'zod'
 import { createLlm } from './client.js'
+import type { CreateLlmOptions } from './client.js'
 import type { Config } from '../../config/schema.js'
 
 const models: Config['models'] = {
@@ -21,7 +22,7 @@ const makeFakeClient = (textContent: string) => ({
 describe('LLM client', () => {
   it('resolves planning role to planning model id', async () => {
     const fakeClient = makeFakeClient('hello')
-    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'] })
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
     await llm.complete('planning', 'test prompt')
     const call = fakeClient.messages.create.mock.calls[0][0]
     expect(call.model).toBe('claude-opus-4-8')
@@ -29,7 +30,7 @@ describe('LLM client', () => {
 
   it('resolves report role to report model id', async () => {
     const fakeClient = makeFakeClient('hello')
-    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'] })
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
     await llm.complete('report', 'test prompt')
     const call = fakeClient.messages.create.mock.calls[0][0]
     expect(call.model).toBe('claude-sonnet-4-6')
@@ -37,7 +38,7 @@ describe('LLM client', () => {
 
   it('resolves verification role to verification model id', async () => {
     const fakeClient = makeFakeClient('hello')
-    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'] })
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
     await llm.complete('verification', 'test prompt')
     const call = fakeClient.messages.create.mock.calls[0][0]
     expect(call.model).toBe('claude-opus-4-8')
@@ -45,7 +46,7 @@ describe('LLM client', () => {
 
   it('returns text when no schema provided', async () => {
     const fakeClient = makeFakeClient('response text')
-    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'] })
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
     const result = await llm.complete('report', 'prompt')
     expect(result).toBe('response text')
   })
@@ -53,7 +54,7 @@ describe('LLM client', () => {
   it('parses and validates JSON when schema is provided', async () => {
     const schema = z.object({ name: z.string(), value: z.number() })
     const fakeClient = makeFakeClient(JSON.stringify({ name: 'test', value: 42 }))
-    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'] })
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
     const result = await llm.complete('planning', 'prompt', schema)
     expect(result).toEqual({ name: 'test', value: 42 })
   })
@@ -68,7 +69,7 @@ describe('LLM client', () => {
       },
     }
     const llm = createLlm('test-api-key', models, {
-      client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'],
+      client: fakeClient as unknown as CreateLlmOptions['client'],
       backoffMs: 0, // no delay in tests
     })
     await expect(llm.complete('planning', 'prompt', schema)).rejects.toThrow()
@@ -87,7 +88,7 @@ describe('LLM client', () => {
       },
     }
     const llm = createLlm('test-api-key', models, {
-      client: fakeClient as unknown as Parameters<typeof createLlm>[2]['client'],
+      client: fakeClient as unknown as CreateLlmOptions['client'],
       backoffMs: 0,
     })
     const result = await llm.complete('planning', 'prompt', schema)

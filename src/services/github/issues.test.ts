@@ -40,7 +40,7 @@ describe('upsertIssue', () => {
         labels: ['Auto-Detect'],
       }),
     )
-    const callArg = (client.issues.create as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
+    const callArg = (client.issues.create as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]
     expect(callArg.body).toContain('abc123def456')
     expect(callArg.body).toContain('fingerprint:')
   })

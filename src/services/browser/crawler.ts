@@ -5,13 +5,13 @@ import type { RawPage, TargetEnv, Scenario } from '../../domain/types.js'
 
 // Minimal shape used from Playwright's Browser/Page to keep the module unit-testable
 export type PageLike = {
-  goto: (url: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<unknown>
+  goto: (url: string, opts?: { waitUntil?: 'commit' | 'domcontentloaded' | 'networkidle' | 'load'; timeout?: number }) => Promise<unknown>
   url: () => string
   title: () => Promise<string>
   content: () => Promise<string>
   evaluate: (fn: () => Record<string, string>) => Promise<Record<string, string>>
   screenshot: (opts: { path: string; fullPage: boolean }) => Promise<unknown>
-  waitForLoadState: (state?: string) => Promise<void>
+  waitForLoadState: (state?: 'domcontentloaded' | 'networkidle' | 'load') => Promise<void>
   locator: (selector: string) => {
     fill: (value: string) => Promise<void>
     click: () => Promise<void>

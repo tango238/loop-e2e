@@ -20,7 +20,7 @@ type AnthropicClient = {
   }
 }
 
-type CreateLlmOptions = {
+export type CreateLlmOptions = {
   /** Injectable Anthropic client for testing — defaults to new Anthropic({ apiKey }) */
   client?: AnthropicClient
   /** Base backoff in ms between retries (0 in tests) */

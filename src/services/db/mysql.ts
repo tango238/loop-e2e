@@ -1,6 +1,6 @@
 import { maskSecrets } from '../../util/mask.js'
 import type { DbAdapter, Row } from './adapter.js'
-import type { DbSchema } from '../../config/schema.js'
+import type { DbConfig } from '../../config/schema.js'
 
 /** Minimal interface for a mysql2 Connection — injectable for unit tests */
 export interface MysqlConnection {
@@ -52,7 +52,7 @@ function defaultMysqlCtor(opts: {
  * @param connCtor - injectable connection factory (tests pass a fake)
  */
 export function createMysqlAdapter(
-  conn: DbSchema,
+  conn: DbConfig,
   password: string,
   connCtor: MysqlConnectionCtor = defaultMysqlCtor,
 ): DbAdapter {
