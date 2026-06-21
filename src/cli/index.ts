@@ -8,6 +8,7 @@ import { runRun } from './commands/run.js'
 import { runFeedback } from './commands/feedback.js'
 import { createLlm } from '../services/llm/client.js'
 import { loadConfig } from '../config/load.js'
+import { logger } from '../util/logger.js'
 import type { InitDeps } from './commands/init.js'
 
 const program = new Command()
@@ -46,20 +47,94 @@ program
   .description('Run E2E loop: collect → diff → report')
   .option('--target <name>', 'Target name to run against')
   .action(async (opts: { target?: string }) => {
-    await runRun(process.cwd(), opts, {
-      collect: async (_ctx, _deps) => {
-        throw new Error('Real collect not wired — use programmatic API with deps')
-      },
-      detectDiffs: async () => {
-        throw new Error('Real detectDiffs not yet wired (pending M6)')
-      },
-      runVerify: async () => {
-        throw new Error('Real runVerify not yet wired (pending M6)')
-      },
-      writeReport: async () => {
-        throw new Error('Real writeReport not yet wired (pending M6)')
-      },
-    })
+    const cwd = process.cwd()
+
+    let config: import('../config/schema.js').Config
+    let secrets: import('../domain/types.js').Secrets
+    try {
+      const loaded = await loadConfig(cwd)
+      config = loaded.config
+      secrets = loaded.secrets
+    } catch (err) {
+      process.stderr.write(`Error loading config: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+
+    const llm = createLlm(secrets.anthropicApiKey, config.models)
+
+    const { loadScenarios } = await import('../scenario/schema.js')
+    const scenarioDir = config.scenarioDir.startsWith('/')
+      ? config.scenarioDir
+      : `${cwd}/${config.scenarioDir}`
+    const scenarios = await loadScenarios(scenarioDir)
+
+    // Use named target if --target given; fall back to first target
+    const selectedTarget = opts.target
+      ? (config.targets.find((t) => t.name === opts.target) ?? config.targets[0])
+      : config.targets[0]
+
+    if (!selectedTarget) {
+      process.stderr.write('Error: no targets configured in loop-e2e.yaml\n')
+      process.exit(1)
+    }
+
+    logger.info({ target: selectedTarget.name }, 'Starting run for target')
+
+    const { launchBrowser } = await import('../services/browser/browser.js')
+    const { crawl } = await import('../services/browser/crawler.js')
+    const { extractPageInfo } = await import('../services/llm/structureExtract.js')
+    const { collect } = await import('../pipeline/collect.js')
+    const { detectDiffs } = await import('../pipeline/diff.js')
+    const { runVerify } = await import('../pipeline/verify/index.js')
+    const { writeReport } = await import('../pipeline/report.js')
+    const { adjudicate } = await import('../services/llm/refute.js')
+    const { upsertIssue } = await import('../services/github/issues.js')
+    const { parseRepoUrl } = await import('../services/github/labels.js')
+    const storeModule = await import('../state/store.js')
+
+    const githubClient = secrets.githubToken ? createGithubClient(secrets.githubToken) : null
+    const repoUrl = config.repositories[0]?.url
+    const repo = (githubClient && repoUrl) ? parseRepoUrl(repoUrl) : null
+
+    const allSecrets: string[] = [
+      secrets.anthropicApiKey,
+      secrets.githubToken,
+      ...Object.values(secrets.db),
+      ...Object.values(secrets.targetAuth),
+    ].filter(Boolean) as string[]
+
+    let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
+    try {
+      browserCtx = await launchBrowser()
+      await runRun(cwd, opts, {
+        collect: (ctx, _deps) => collect(ctx, {
+          store: storeModule,
+          crawl,
+          extractPageInfo: (lm, raw) => extractPageInfo(lm as Parameters<typeof extractPageInfo>[0], raw),
+          browser: browserCtx!.browser,
+          llm,
+          scenarios,
+        }),
+        detectDiffs,
+        runVerify,
+        writeReport,
+        llm,
+        scenarios,
+        adjudicate,
+        upsertIssue: (client, r, finding, label) => upsertIssue(client, r, finding, label, allSecrets),
+        store: { saveBaseline: (root, structure) => storeModule.saveBaseline(root, structure) },
+        githubClient,
+        repo,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`Run failed: ${msg}\n`)
+      process.exit(1)
+    } finally {
+      if (browserCtx) {
+        await browserCtx.browser.close().catch(() => {})
+      }
+    }
   })
 
 program

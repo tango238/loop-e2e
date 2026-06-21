@@ -1,7 +1,8 @@
 import { ensureDir } from '../../util/fs.js'
 import { logger } from '../../util/logger.js'
 import { screenshot } from './snapshot.js'
-import type { RawPage, TargetEnv, Scenario } from '../../domain/types.js'
+import type { RawPage, TargetEnv } from '../../domain/types.js'
+import type { Scenario } from '../../scenario/schema.js'
 
 // Minimal shape used from Playwright's Browser/Page to keep the module unit-testable
 export type PageLike = {

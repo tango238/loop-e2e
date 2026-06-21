@@ -139,4 +139,76 @@ describe('runRun', () => {
     expect(order).toEqual(['collect', 'diff', 'verify-fail', 'report'])
     expect(capturedVerifyFindings).toEqual([])
   })
+
+  it('threads deps.scenarios into detectDiffs — not hardcoded []', async () => {
+    const scenario = {
+      id: 'sc-1',
+      title: 'Login flow',
+      businessFlow: 'User logs in',
+      steps: [{ action: 'navigate', target: '/login', expectedOutcome: 'Form loads' }],
+      expectedResults: [{ kind: 'ui' as const, description: 'Form visible', assertion: 'form present' }],
+      expectedDbState: [],
+    }
+    let capturedScenarios: unknown = 'not-set'
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockImplementation(async (d: { scenarios: unknown }) => {
+        capturedScenarios = d.scenarios
+        return []
+      }),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-scenarios-threaded',
+      scenarios: [scenario],
+    }
+
+    await runRun('/tmp/root', {}, deps)
+    expect(capturedScenarios).toEqual([scenario])
+  })
+
+  it('passes adjudicate dep through to writeReport without defaulting to no-op', async () => {
+    const realAdjudicate = vi.fn().mockResolvedValue({
+      classification: 'bug' as const,
+      confidence: 0.9,
+      confirmedCount: 3,
+      panelSize: 3,
+      votes: [],
+      rationale: 'real adjudicate called',
+    })
+
+    const writeReportDeps: Record<string, unknown> = {}
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([sampleFinding]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, d: Record<string, unknown>) => {
+        Object.assign(writeReportDeps, d)
+      }),
+      clock: () => 'run-real-adjudicate',
+      adjudicate: realAdjudicate,
+    }
+
+    await runRun('/tmp/root', {}, deps)
+    expect(writeReportDeps['adjudicate']).toBe(realAdjudicate)
+  })
+
+  it('passes store.saveBaseline dep through to writeReport without defaulting to no-op', async () => {
+    const realSaveBaseline = vi.fn().mockResolvedValue(undefined)
+    const writeReportDeps: Record<string, unknown> = {}
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, d: Record<string, unknown>) => {
+        Object.assign(writeReportDeps, d)
+      }),
+      clock: () => 'run-real-store',
+      store: { saveBaseline: realSaveBaseline },
+    }
+
+    await runRun('/tmp/root', {}, deps)
+    const store = writeReportDeps['store'] as { saveBaseline: unknown }
+    expect(store?.saveBaseline).toBe(realSaveBaseline)
+  })
 })

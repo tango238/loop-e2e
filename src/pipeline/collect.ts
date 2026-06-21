@@ -7,8 +7,8 @@ import type {
   PriorState,
   Feedback,
   TargetEnv,
-  Scenario,
 } from '../domain/types.js'
+import type { Scenario } from '../scenario/schema.js'
 import type { BrowserLike } from '../services/browser/crawler.js'
 
 // --- Injectable dependency interfaces ---
@@ -40,6 +40,8 @@ export type CollectDeps = {
   llm?: unknown
   /** Screenshot output directory (default: <root>/.loop-e2e/runs/<runId>/screenshots) */
   screenshotDir?: string
+  /** Scenarios to guide crawl navigation (default: []) */
+  scenarios?: Scenario[]
 }
 
 export type CollectResult = {
@@ -103,10 +105,9 @@ export async function collect(ctx: RunContext, deps: CollectDeps): Promise<Colle
   }
 
   // 3. Crawl — skip if no browser is available (returns empty page list)
-  // Note: scenarios is hardcoded to [] here — a known placeholder; the `run` command
-  // will thread real scenarios through in a later milestone (M4/M5).
+  // Pass deps.scenarios so the crawler can follow scenario step navigation targets.
   const rawPages: RawPage[] = browser !== null
-    ? await crawl(browser, target, [], screenshotDir)
+    ? await crawl(browser, target, deps.scenarios ?? [], screenshotDir)
     : []
   logger.info({ pageCount: rawPages.length }, 'Crawl complete')
 

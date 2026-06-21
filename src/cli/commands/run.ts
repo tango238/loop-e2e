@@ -33,10 +33,20 @@ export type RunDeps = {
   llm?: import('../../services/llm/client.js').Llm
   /** Pages from the collect stage, passed to verify; empty in tests unless injected */
   pages?: RawPage[]
-  /** Scenarios for the verify stage */
+  /** Scenarios for the verify stage and detectDiffs */
   scenarios?: Scenario[]
   /** Injectable DB driver factories for verify tests */
   dbDrivers?: DbDriverOptions
+  /** Real adjudicate fn — production passes adjudicate from refute.ts */
+  adjudicate?: WriteReportDeps['adjudicate']
+  /** Real upsertIssue fn — production passes upsertIssue from issues.ts */
+  upsertIssue?: WriteReportDeps['upsertIssue']
+  /** Real store with saveBaseline — production passes from store.ts */
+  store?: WriteReportDeps['store']
+  /** GitHub client — null means no issue filing */
+  githubClient?: import('../../services/github/client.js').GithubClient | null
+  /** GitHub repo ref — null means no issue filing */
+  repo?: import('../../services/github/labels.js').RepoRef | null
 }
 
 function makeEmptyStructure(): SiteStructure {
@@ -104,13 +114,13 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
     logger.error({ error, runId }, 'collect stage failed — continuing with empty structure')
   }
 
-  // Stage 2: diff
+  // Stage 2: diff — use deps.scenarios (not hardcoded []) so production gets real scenario data
   let diffFindings: DiffFinding[] = []
   try {
     diffFindings = await detectDiffs({
       current: structure,
       baseline: prior.baseline,
-      scenarios: [],
+      scenarios: deps.scenarios ?? [],
       llm: llm as never,
     })
   } catch (error) {
@@ -133,6 +143,8 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
   }
 
   // Stage 4: report (always runs)
+  // Use injected deps for adjudicate/upsertIssue/store; fall back to no-ops only in tests
+  // that don't exercise those paths. Production wiring (cli/index.ts) must always supply real deps.
   try {
     await writeReport(root, runId, {
       ctx: runCtx,
@@ -140,20 +152,18 @@ export async function runRun(root: string, _opts: RunOpts, deps: RunDeps): Promi
       verifyFindings,
       currentStructure: structure,
       llm: llm as never,
-      adjudicate: async () => ({
+      adjudicate: deps.adjudicate ?? (async () => ({
         classification: 'uncertain' as const,
         confidence: 0,
         confirmedCount: 0,
         panelSize: 3,
         votes: [],
-        rationale: 'no llm available',
-      }),
-      upsertIssue: async () => {},
-      store: {
-        saveBaseline: async () => {},
-      },
-      githubClient: null,
-      repo: null,
+        rationale: 'no adjudicate dep provided',
+      })),
+      upsertIssue: deps.upsertIssue ?? (async () => {}),
+      store: deps.store ?? { saveBaseline: async () => {} },
+      githubClient: deps.githubClient ?? null,
+      repo: deps.repo ?? null,
     })
   } catch (error) {
     logger.error({ error, runId }, 'report stage failed')
