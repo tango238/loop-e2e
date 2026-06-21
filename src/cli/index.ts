@@ -3,6 +3,7 @@ import { Command } from 'commander'
 import { createGithubClient } from '../services/github/client.js'
 import { ensureLabels } from '../services/github/labels.js'
 import { runInit } from './commands/init.js'
+import { runScenario } from './commands/scenario.js'
 import type { InitDeps } from './commands/init.js'
 
 const program = new Command()
@@ -26,6 +27,14 @@ program
     }
 
     await runInit(process.cwd(), {}, realDeps)
+  })
+
+program
+  .command('scenario')
+  .description('Generate E2E test scenarios from repository requirements using AI')
+  .option('--from <paths...>', 'Additional requirement files to merge into context')
+  .action(async (opts: { from?: string[] }) => {
+    await runScenario(process.cwd(), { from: opts.from })
   })
 
 program.parse()

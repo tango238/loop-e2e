@@ -14,12 +14,11 @@ function makeFile(relPath: string, content: string): SelectedFile {
 
 function makeMockLlm(responseText = 'Summarized content'): { llm: Llm; callCount: () => number } {
   let count = 0
-  const llm: Llm = {
-    complete: vi.fn(async () => {
-      count++
-      return responseText
-    }) as Llm['complete'],
-  }
+  const mock = vi.fn(async () => {
+    count++
+    return responseText
+  })
+  const llm = { complete: mock } as unknown as Llm
   return { llm, callCount: () => count }
 }
 

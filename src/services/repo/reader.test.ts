@@ -22,9 +22,8 @@ const ingestion: IngestionConfig = {
 }
 
 function makeMockLlm(): Llm {
-  return {
-    complete: vi.fn(async () => 'mocked summary') as Llm['complete'],
-  }
+  const mock = vi.fn(async () => 'mocked summary')
+  return { complete: mock } as unknown as Llm
 }
 
 describe('collectRequirements', () => {
