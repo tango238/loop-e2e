@@ -133,6 +133,46 @@ describe('LLM client', () => {
   })
 })
 
+describe('language directive', () => {
+  const promptSent = (fake: ReturnType<typeof makeFakeClient>): string =>
+    fake.messages.create.mock.calls[0][0].messages[0].content as string
+
+  it('prepends a Japanese directive by default (no language option)', async () => {
+    const fake = makeFakeClient('hello')
+    const llm = createLlm('k', models, { client: fake as unknown as CreateLlmOptions['client'] })
+    await llm.complete('report', 'REPORT_BODY_PROMPT')
+    const sent = promptSent(fake)
+    expect(sent).toContain('Japanese')
+    expect(sent).toContain('REPORT_BODY_PROMPT')
+    // selectors/keys must be explicitly preserved
+    expect(sent).toMatch(/selectors|JSON keys/)
+  })
+
+  it('uses the configured language when set', async () => {
+    const fake = makeFakeClient('hello')
+    const llm = createLlm('k', models, { client: fake as unknown as CreateLlmOptions['client'], language: 'en' })
+    await llm.complete('report', 'X')
+    expect(promptSent(fake)).toContain('English')
+  })
+
+  it('passes an unknown language code through verbatim', async () => {
+    const fake = makeFakeClient('hello')
+    const llm = createLlm('k', models, { client: fake as unknown as CreateLlmOptions['client'], language: 'fr' })
+    await llm.complete('report', 'X')
+    expect(promptSent(fake)).toContain('fr')
+  })
+
+  it('applies the directive to structured (schema) calls too', async () => {
+    const schema = z.object({ ok: z.boolean() })
+    const fake = makeFakeClient('{"ok":true}')
+    const llm = createLlm('k', models, { client: fake as unknown as CreateLlmOptions['client'] })
+    await llm.complete('verification', 'JUDGE_THIS', schema)
+    const sent = promptSent(fake)
+    expect(sent).toContain('Japanese')
+    expect(sent).toContain('JUDGE_THIS')
+  })
+})
+
 describe('extractJson', () => {
   it('strips ```json fences', () => {
     expect(extractJson('```json\n{"a":1}\n```')).toBe('{"a":1}')

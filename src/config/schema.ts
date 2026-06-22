@@ -88,6 +88,8 @@ export const ConfigSchema = z.object({
   databases: z.array(DbSchema),
   schedule: z.object({ intervalMinutes: z.number().int().min(1) }),
   scenarioDir: z.string().min(1),
+  /** Language for AI-generated human-readable text (scenarios, report prose, finding details/rationale). Defaults to Japanese ('ja') when unset. */
+  language: z.string().min(1).optional(),
   github: z.object({ labels: z.object({ ready: z.string(), autoDetect: z.string() }) }),
   baseline: z.object({ commit: z.boolean().default(false) }).default({ commit: false }),
   models: ModelsSchema,

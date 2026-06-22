@@ -7,7 +7,7 @@ import type { BrowserLike } from '../../services/browser/crawler.js'
 export type RunExploreDeps = {
   loadConfig: (cwd: string) => Promise<{ config: Config; secrets: Secrets }>
   explore: (root: string, opts: ExploreOpts, deps: ExploreDeps) => Promise<ExploreResult>
-  createLlm: (apiKey: string, models: Config['models']) => import('../../services/llm/client.js').Llm
+  createLlm: (apiKey: string, models: Config['models'], options?: { language?: string }) => import('../../services/llm/client.js').Llm
   createDbAdapter: (conn: Config['databases'][number], password: string) => import('../../services/db/adapter.js').DbAdapter
   createGithubClient: (token: string) => import('../../services/github/client.js').GithubClient
   launchBrowser: () => Promise<{ browser: BrowserLike }>
@@ -52,7 +52,7 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
     ...Object.values(secrets.targetAuth),
   ].filter(Boolean) as string[]
 
-  const llm = deps.createLlm(secrets.anthropicApiKey, config.models)
+  const llm = deps.createLlm(secrets.anthropicApiKey, config.models, { language: config.language })
 
   const dbConf = config.databases[0]
   const dbType: 'postgres' | 'mysql' = (dbConf?.type as 'postgres' | 'mysql') ?? 'postgres'

@@ -44,7 +44,7 @@ export async function runScenario(
   const { config, secrets } = await loadConfig(root)
 
   const llm =
-    deps.llm ?? createLlm(secrets.anthropicApiKey, config.models)
+    deps.llm ?? createLlm(secrets.anthropicApiKey, config.models, { language: config.language })
 
   const collect = deps.collectRequirements ?? collectRequirements
   const generate = deps.generateScenarios ?? generateScenarios

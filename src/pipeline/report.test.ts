@@ -58,6 +58,7 @@ function makeCtx(root: string): RunContext {
       databases: [],
       schedule: { intervalMinutes: 60 },
       scenarioDir: 'scenarios',
+      language: 'ja',
       github: { labels: { ready: 'Ready', autoDetect: 'Auto-Detect' } },
       baseline: { commit: false },
       models: defaultModels,
