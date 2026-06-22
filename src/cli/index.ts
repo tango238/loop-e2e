@@ -355,4 +355,43 @@ program
     }
   })
 
+program
+  .command('explore')
+  .description('Exploratory input-validation testing: drive forms with invalid/boundary values, detect validation gaps + poor error messages')
+  .option('--target <name>', 'Target name to run against')
+  .option('--screen <path...>', 'Screen path(s) to explore (repeatable)')
+  .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
+  .option('--no-reseed', 'Do not re-seed the database after the run (skips the dev-guard)')
+  .action(async (opts: { target?: string; screen?: string[]; skipPrepare?: boolean; reseed?: boolean }) => {
+    const cwd = process.cwd()
+    const { runExplore } = await import('./commands/explore.js')
+    const { explore } = await import('../pipeline/explore.js')
+    const { createDbAdapter } = await import('../services/db/index.js')
+    try {
+      const result = await runExplore(
+        cwd,
+        { target: opts.target, screens: opts.screen ?? [], skipPrepare: opts.skipPrepare, noReseed: opts.reseed === false },
+        {
+          loadConfig,
+          explore,
+          createLlm,
+          createDbAdapter,
+          createGithubClient,
+          launchBrowser: async () => {
+            const { launchBrowser } = await import('../services/browser/browser.js')
+            return launchBrowser()
+          },
+        },
+      )
+      process.stdout.write(
+        `explore: forms ${result.forms} / cases ${result.cases} / ` +
+          `gaps ${result.gapsHigh + result.gapsMedium} (high ${result.gapsHigh}/medium ${result.gapsMedium}) / ` +
+          `message-issues ${result.messageIssues} → report .loop-e2e/reports/\n`,
+      )
+    } catch (err) {
+      process.stderr.write(`explore failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+  })
+
 program.parse()
