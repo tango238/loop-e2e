@@ -90,9 +90,10 @@ Supported step actions: `navigate`, `click`, `fill`, `submit`, `wait`, `assert`.
 `wait`/`assert` targets use `text=…` (text present), `url=…` (current URL contains), a bare
 integer (milliseconds, `wait` only), or a CSS selector (element exists). `fill` inputs may
 reference secrets as `{{ENV_NAME}}` (resolved from `.env`/process env) or `{{TWO_FACTOR_PIN}}`
-(resolved by running the login scenario's `twoFactor.pinCommand` in its script dir). Resolved secret values are
-masked out of all findings and logs; a referenced placeholder that cannot be resolved fails
-the scenario.
+(resolved by running the scenario's own `twoFactor.pinCommand` in its script dir — a scenario
+that references `{{TWO_FACTOR_PIN}}` must therefore declare a `twoFactor` block). Resolved
+secret values are masked out of all findings and logs; a referenced placeholder that cannot be
+resolved fails the scenario.
 
 **Writing reliable scenarios:**
 
