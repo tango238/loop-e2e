@@ -91,7 +91,19 @@ Supported step actions: `navigate`, `click`, `fill`, `submit`, `wait`, `assert`.
 integer (milliseconds, `wait` only), or a CSS selector (element exists). `fill` inputs may
 reference secrets as `{{ENV_NAME}}` (resolved from `.env`/process env) or `{{TWO_FACTOR_PIN}}`
 (resolved by running the target's `auth.twoFactor.pinCommand`). Resolved secret values are
-masked out of all findings and logs.
+masked out of all findings and logs; a referenced placeholder that cannot be resolved fails
+the scenario.
+
+**Writing reliable scenarios:**
+
+- **Start each scenario with a `navigate` step.** The browser page is reused across scenarios,
+  so a scenario that begins with `click`/`assert` runs against whatever page the previous
+  scenario (or a failed login) left behind. A leading `navigate` makes each scenario
+  self-contained. (`grow`-generated scenarios already do this.)
+- **Pair `submit` with a following `assert`.** A `submit` step only clicks and waits for a
+  client-side navigation; it does **not** fail when the form is rejected and the page stays
+  put. To actually catch a broken submission, follow it with an `assert` (e.g.
+  `assert url=/dashboard` or `assert text=Saved`) that confirms the expected outcome.
 
 `grow`-generated scenarios are post-login pages — tag them `authenticated`; tag a login-flow
 scenario `unauthenticated`.

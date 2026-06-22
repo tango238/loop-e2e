@@ -37,6 +37,7 @@ export function resolveUrl(baseUrl: string, target: string): string {
 
 async function resolveInput(raw: string | undefined, deps: ScenarioExecDeps): Promise<string> {
   if (!raw) return ''
+  const missing: string[] = []
   let out = raw
   // {{TWO_FACTOR_PIN}} → run pinCommand, take first 4-8 digit run
   if (out.includes('{{TWO_FACTOR_PIN}}')) {
@@ -45,10 +46,20 @@ async function resolveInput(raw: string | undefined, deps: ScenarioExecDeps): Pr
       const { stdout } = await deps.pinRunner('sh', ['-c', deps.pinCommand])
       pin = (stdout.match(/\d{4,8}/) ?? [''])[0]
     }
+    if (!pin) missing.push('TWO_FACTOR_PIN')
     out = out.replaceAll('{{TWO_FACTOR_PIN}}', pin)
   }
-  // {{ENVNAME}} → vars then process.env
-  out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, name: string) => deps.vars?.[name] ?? process.env[name] ?? '')
+  // {{ENVNAME}} → vars then process.env. An unresolved reference fails the step
+  // (spec §8); only the placeholder NAME (never its value) appears in the error.
+  out = out.replace(/\{\{([A-Z0-9_]+)\}\}/g, (_m, name: string) => {
+    const v = deps.vars?.[name] ?? process.env[name]
+    if (v === undefined) {
+      missing.push(name)
+      return ''
+    }
+    return v
+  })
+  if (missing.length > 0) throw new Error(`unresolved placeholder(s): ${missing.join(', ')}`)
   return out
 }
 

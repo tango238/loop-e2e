@@ -118,6 +118,31 @@ describe('executeScenario', () => {
     expect(r.detail).not.toContain('654321')
   })
 
+  it('fails the step when a referenced placeholder cannot be resolved', async () => {
+    const page = makePage({ present: ['#email'] })
+    const r = await executeScenario(
+      page,
+      target,
+      scn([{ action: 'fill', target: '#email', input: '{{MISSING_VAR}}', expectedOutcome: 'filled' }]),
+      { sleep, vars: {} },
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failedStepIndex).toBe(0)
+    expect(r.detail).toContain('MISSING_VAR')
+  })
+
+  it('fails when {{TWO_FACTOR_PIN}} is referenced but no pin can be fetched', async () => {
+    const page = makePage({ present: ['#pin'] })
+    const r = await executeScenario(
+      page,
+      target,
+      scn([{ action: 'fill', target: '#pin', input: '{{TWO_FACTOR_PIN}}', expectedOutcome: 'filled' }]),
+      { sleep },
+    )
+    expect(r.ok).toBe(false)
+    expect(r.detail).toContain('TWO_FACTOR_PIN')
+  })
+
   it('asserts element existence via locator.count', async () => {
     const page = makePage({ present: ['table'] })
     const r = await executeScenario(
