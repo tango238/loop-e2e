@@ -118,6 +118,22 @@ describe('executeScenario', () => {
     expect(r.detail).not.toContain('654321')
   })
 
+  it("uses the scenario's own twoFactor.pinCommand run in its scriptDir (cwd)", async () => {
+    const page = makePage({ present: ['#pin'] })
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      fill: async () => {}, click: async () => {}, count: async () => 1,
+    }))
+    const pinRunner = vi.fn(async () => ({ stdout: '222333', stderr: '' }))
+    const scenario = {
+      ...scn([{ action: 'fill', target: '#pin', input: '{{TWO_FACTOR_PIN}}', expectedOutcome: 'filled' }]),
+      twoFactor: { pinCommand: 'bash get-2fa-pin.sh', pinFieldSelector: '#pin', submitSelector: '#s' },
+      scriptDir: '/scenarios/admin-login',
+    } as unknown as Parameters<typeof executeScenario>[2]
+    const r = await executeScenario(page, target, scenario, { sleep, pinRunner, secrets: [] })
+    expect(r.ok).toBe(true)
+    expect(pinRunner).toHaveBeenCalledWith('sh', ['-c', 'bash get-2fa-pin.sh'], { cwd: '/scenarios/admin-login' })
+  })
+
   it('fails the step when a referenced placeholder cannot be resolved', async () => {
     const page = makePage({ present: ['#email'] })
     const r = await executeScenario(

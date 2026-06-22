@@ -2,7 +2,7 @@ import { logger } from '../../util/logger.js'
 import { maskSecrets } from '../../util/mask.js'
 import type { PageLike } from './crawler.js'
 import type { TargetEnv } from '../../domain/types.js'
-import type { Scenario, ScenarioStep } from '../../scenario/schema.js'
+import type { Scenario, ScenarioStep, LoadedScenario } from '../../scenario/schema.js'
 import type { ComposeRunner } from '../compose/compose.js'
 
 export type ScenarioRunResult = {
@@ -18,8 +18,10 @@ export type ScenarioExecDeps = {
   pinRunner?: ComposeRunner
   /** {{ENVNAME}} resolution source (falls back to process.env) */
   vars?: Record<string, string>
-  /** command run to resolve {{TWO_FACTOR_PIN}} */
+  /** command run to resolve {{TWO_FACTOR_PIN}} (defaults to the executing scenario's twoFactor.pinCommand) */
   pinCommand?: string
+  /** cwd for pinCommand — the scenario's script dir (scenarios/<name>/) */
+  scriptDir?: string
   /** values to mask out of detail/logs */
   secrets?: string[]
   /** max ms for wait/submit polling (default 8000) */
@@ -43,7 +45,7 @@ async function resolveInput(raw: string | undefined, deps: ScenarioExecDeps): Pr
   if (out.includes('{{TWO_FACTOR_PIN}}')) {
     let pin = ''
     if (deps.pinRunner && deps.pinCommand) {
-      const { stdout } = await deps.pinRunner('sh', ['-c', deps.pinCommand])
+      const { stdout } = await deps.pinRunner('sh', ['-c', deps.pinCommand], deps.scriptDir ? { cwd: deps.scriptDir } : undefined)
       pin = (stdout.match(/\d{4,8}/) ?? [''])[0]
     }
     if (!pin) missing.push('TWO_FACTOR_PIN')
@@ -82,6 +84,14 @@ export async function executeScenario(
   const attempts = Math.max(1, Math.ceil(navTimeoutMs / intervalMs))
   const mask = (s: string): string => maskSecrets(s, secrets)
 
+  // {{TWO_FACTOR_PIN}} resolves via this scenario's own 2FA command (run in its script dir),
+  // falling back to deps for the synthetic/login-stage paths.
+  const execDeps: ScenarioExecDeps = {
+    ...deps,
+    pinCommand: scenario.twoFactor?.pinCommand ?? deps.pinCommand,
+    scriptDir: (scenario as LoadedScenario).scriptDir ?? deps.scriptDir,
+  }
+
   const fail = (i: number, why: string): ScenarioRunResult => ({
     scenarioId: scenario.id,
     ok: false,
@@ -104,7 +114,7 @@ export async function executeScenario(
           break
         }
         case 'fill': {
-          await page.locator(step.target).fill(await resolveInput(step.input, deps))
+          await page.locator(step.target).fill(await resolveInput(step.input, execDeps))
           break
         }
         case 'submit': {
