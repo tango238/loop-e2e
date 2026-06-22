@@ -90,9 +90,10 @@ Supported step actions: `navigate`, `click`, `fill`, `submit`, `wait`, `assert`.
 `wait`/`assert` targets use `text=…` (text present), `url=…` (current URL contains), a bare
 integer (milliseconds, `wait` only), or a CSS selector (element exists). `fill` inputs may
 reference secrets as `{{ENV_NAME}}` (resolved from `.env`/process env) or `{{TWO_FACTOR_PIN}}`
-(resolved by running the target's `auth.twoFactor.pinCommand`). Resolved secret values are
-masked out of all findings and logs; a referenced placeholder that cannot be resolved fails
-the scenario.
+(resolved by running the scenario's own `twoFactor.pinCommand` in its script dir — a scenario
+that references `{{TWO_FACTOR_PIN}}` must therefore declare a `twoFactor` block). Resolved
+secret values are masked out of all findings and logs; a referenced placeholder that cannot be
+resolved fails the scenario.
 
 **Writing reliable scenarios:**
 
@@ -208,8 +209,8 @@ Options:
 | `--max-pages <n>` | Cap on discovered pages (overrides `grow.maxPages`) |
 | `--skip-prepare` | Skip the pre-run prepare phase |
 
-`grow` requires `ANTHROPIC_API_KEY` (it uses the LLM to propose), and the target's
-`auth.twoFactor.pinCommand` if the app has 2FA (see [2FA config](#2fa-and-grow-config)).
+`grow` requires `ANTHROPIC_API_KEY` (it uses the LLM to propose), and the login scenario's
+`twoFactor.pinCommand` if the app has 2FA (see [2FA](#2fa--owned-by-the-login-scenario-not-config)).
 
 ### `approve`
 
@@ -364,29 +365,53 @@ refutation:
     - intentionality
 ```
 
-### 2FA and grow config
+### 2FA — owned by the login scenario (not config)
 
-To let `run`/`grow` complete a 2-factor login, add `auth.twoFactor` to the target.
-`pinCommand` is a shell command that prints the current PIN to stdout (loop-e2e
-extracts the first 4–8 digit run). It is **environment-specific** and lives in your
-config — e.g. reading the code from the app's DB or a dev mail catcher:
+2-factor login is **environment-specific glue**, so it lives with the **login scenario**, not
+in config. loop-e2e core stays env-agnostic: it just runs the command the scenario specifies,
+in the scenario's script directory.
+
+**Script placement convention:** scripts a scenario uses live in
+`scenarios/<scenario-file-name>/` (the directory named after the scenario file, minus
+`.scenario.yaml`). For `scenarios/admin-login.scenario.yaml`, that's `scenarios/admin-login/`.
+
+Add a `twoFactor` block to the login scenario. `pinCommand` is a shell command that prints the
+current PIN to stdout (loop-e2e extracts the first 4–8 digit run); it runs with **cwd = the
+scenario's script dir**, so it can reference scripts placed alongside the scenario:
+
+```
+scenarios/
+  admin-login.scenario.yaml
+  admin-login/
+    get-2fa-pin.sh          # reads the PIN from a dev mail catcher, app DB, etc.
+```
 
 ```yaml
-targets:
-  - name: admin
-    baseUrl: https://localhost:3100
-    auth:
-      strategy: form
-      loginPath: /login
-      usernameEnv: ADMIN_USER
-      passwordEnv: ADMIN_PASS
-      twoFactor:
-        # Prints the latest 2FA PIN to stdout. Example: read it from the dev DB.
-        pinCommand: "docker exec myproject-app-1 php artisan tinker --execute=\"echo DB::table('two_factor_codes')->latest('id')->first()->pin_code;\""
-        pinFieldSelector: 'input[name="pin_code"]'   # default
-        submitSelector: 'button[type="submit"]'      # default
-        # successUrlPattern: '/dashboard'            # optional; default = moved off /login and /two-factor
+# scenarios/admin-login.scenario.yaml
+id: admin-login
+title: 管理画面ログイン
+businessFlow: メール・パスワードでログインし、2FA の PIN を入力してダッシュボードに到達する。
+steps:
+  - { action: navigate, target: /login, expectedOutcome: ログインフォーム表示 }
+  # … fill credentials, submit, fill {{TWO_FACTOR_PIN}}, submit …
+expectedResults:
+  - { kind: ui, description: ダッシュボード表示, assertion: /login と /two-factor-auth から離れている }
+expectedDbState: []
+precondition:
+  auth: unauthenticated
+twoFactor:
+  pinCommand: bash get-2fa-pin.sh        # cwd = scenarios/admin-login/
+  pinFieldSelector: 'input[name="pin_code"]'   # default
+  submitSelector: 'button[type="submit"]'      # default
+  # successUrlPattern: '/dashboard'            # optional; default = moved off /login and /two-factor
+```
 
+Authenticated-precondition scenarios (and `grow`/`explore`) reuse this designated login
+scenario's 2FA automatically — they find it among the loaded scenarios by its login path.
+
+### grow config
+
+```yaml
 # Discovery crawl limits for `grow` (all optional; defaults shown)
 grow:
   maxPages: 50

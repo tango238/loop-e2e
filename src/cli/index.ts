@@ -234,7 +234,7 @@ program
         scenarioExecDeps: {
           authenticate,
           pinRunner: defaultComposeRunner,
-          pinCommand: selectedTarget.auth?.twoFactor?.pinCommand,
+          // pinCommand/scriptDir come from the designated login scenario (resolved in runScenarioStage).
           vars: secrets.targetAuth,
           secrets: allSecrets,
           clearCookies: async (p: unknown) => {

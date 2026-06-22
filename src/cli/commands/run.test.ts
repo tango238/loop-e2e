@@ -339,7 +339,8 @@ describe('runRun', () => {
     expect(loginFinding.detail).not.toContain('wrongpass')
   })
 
-  it('forwards target twoFactor config and loginDeps into executeLogin', async () => {
+  it('passes the login scenario (which owns twoFactor) and loginDeps into executeLogin', async () => {
+    const twoFactor = { pinCommand: 'bash get-2fa-pin.sh', pinFieldSelector: 'input[name="pin_code"]', submitSelector: 'button[type="submit"]' }
     const loginScenario = {
       id: 'sc-2fa',
       title: 'User login',
@@ -350,11 +351,13 @@ describe('runRun', () => {
       ],
       expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL is /' }],
       expectedDbState: [],
+      // 2FA is owned by the scenario, with its script dir.
+      twoFactor,
+      scriptDir: '/tmp/root/scenarios/sc-2fa',
     }
     const executeLogin = vi.fn().mockResolvedValue({ ok: true, detail: 'ok', finalUrl: 'http://localhost:3000/' })
     const fakePage = { goto: vi.fn(), url: vi.fn(() => 'http://localhost:3000/'), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn() }
     const loginDeps = { getAuthResponse: () => ({ status: 422, bodyText: 'x' }) }
-    const twoFactor = { pinCommand: 'echo 123456', pinFieldSelector: 'input[name="pin_code"]', submitSelector: 'button[type="submit"]' }
 
     await runRun('/tmp/root', {}, {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
@@ -368,7 +371,7 @@ describe('runRun', () => {
         runId: 'run-2fa',
         config: {
           repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend' as const, audience: 'user' as const }],
-          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD', twoFactor } }],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
           databases: [],
           schedule: { intervalMinutes: 60 },
           scenarioDir: 'scenarios',
@@ -386,8 +389,9 @@ describe('runRun', () => {
     })
 
     expect(executeLogin).toHaveBeenCalledOnce()
-    const [, passedTarget, , , passedDeps] = executeLogin.mock.calls[0]
-    expect(passedTarget.auth.twoFactor).toEqual(twoFactor)
+    const [, , passedScenario, , passedDeps] = executeLogin.mock.calls[0]
+    expect(passedScenario.twoFactor).toEqual(twoFactor)
+    expect(passedScenario.scriptDir).toBe('/tmp/root/scenarios/sc-2fa')
     expect(passedDeps).toBe(loginDeps)
   })
 

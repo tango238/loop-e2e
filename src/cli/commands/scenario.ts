@@ -72,8 +72,10 @@ export async function runScenario(
   const existingById = new Map(existing.map((s) => [s.id, s]))
 
   for (const scenario of scenarios) {
-    const prev = existingById.get(scenario.id)
-    if (prev) {
+    const loadedPrev = existingById.get(scenario.id)
+    if (loadedPrev) {
+      // Compare persisted content only — strip the runtime-only scriptDir off the loaded scenario.
+      const { scriptDir: _scriptDir, ...prev } = loadedPrev
       const changed = JSON.stringify(prev) !== JSON.stringify(scenario)
       if (!changed) {
         logger.info({ id: scenario.id }, 'Scenario unchanged — skipping')
