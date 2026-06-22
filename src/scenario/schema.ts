@@ -16,6 +16,8 @@ export const ExpectedResultSchema = z.object({
   kind: z.enum(['ui', 'api', 'db', 'email', 'log']),
   description: z.string().min(1),
   assertion: z.string().min(1),
+  /** Optional machine-readable API endpoint (used by rdra-export; method defaults to ANY). */
+  apiEndpoint: z.object({ method: z.string().optional(), path: z.string().min(1) }).optional(),
 })
 
 // --- Expected DB state schema ---
