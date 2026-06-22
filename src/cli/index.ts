@@ -136,6 +136,20 @@ program
 
     logger.info({ target: selectedTarget.name }, 'Starting run for target')
 
+    // Build the real RunContext so the pipeline runs against the configured target/databases/secrets.
+    // Without this, runRun falls back to a localhost/empty stub (collect crawls http://localhost,
+    // auth/scenario stages get no credentials, registered-data sees no databases).
+    // Honor --target by ordering the selected target first (collect/scenario stages use targets[0]).
+    const orderedConfig: import('../config/schema.js').Config = selectedTarget === config.targets[0]
+      ? config
+      : { ...config, targets: [selectedTarget, ...config.targets.filter((t) => t !== selectedTarget)] }
+    const runContext: import('../domain/types.js').RunContext = {
+      root: cwd,
+      runId: '',
+      config: orderedConfig,
+      secrets,
+    }
+
     const { launchBrowser } = await import('../services/browser/browser.js')
     const { crawl } = await import('../services/browser/crawler.js')
     const { extractPageInfo } = await import('../services/llm/structureExtract.js')
@@ -167,6 +181,7 @@ program
       browserCtx = await launchBrowser()
       const launchedBrowser = browserCtx.browser
       await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
+        ctx: runContext,
         prepare,
         collect: (ctx, _deps) => collect(ctx, {
           store: storeModule,
