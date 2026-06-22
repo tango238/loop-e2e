@@ -76,6 +76,20 @@ describe('ScenarioSchema', () => {
     }
     expect(ScenarioSchema.safeParse(bad).success).toBe(false)
   })
+
+  it('parses an optional twoFactor block and defaults its selectors', () => {
+    const r = ScenarioSchema.safeParse({ ...validScenario, twoFactor: { pinCommand: 'bash get-2fa-pin.sh' } })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.twoFactor?.pinCommand).toBe('bash get-2fa-pin.sh')
+      expect(r.data.twoFactor?.pinFieldSelector).toBe('input[name="pin_code"]')
+      expect(r.data.twoFactor?.submitSelector).toBe('button[type="submit"]')
+    }
+  })
+
+  it('rejects a twoFactor block without pinCommand', () => {
+    expect(ScenarioSchema.safeParse({ ...validScenario, twoFactor: { pinFieldSelector: '#x' } }).success).toBe(false)
+  })
 })
 
 describe('loadScenarios', () => {
@@ -106,6 +120,19 @@ describe('loadScenarios', () => {
     expect(result[0]?.id).toBe('sc-001')
   })
 
+  it('annotates each loaded scenario with its scriptDir (<dir>/<file-basename>)', async () => {
+    await saveScenario(dir, validScenario)
+    const result = await loadScenarios(dir)
+    expect(result[0]?.scriptDir).toBe(join(dir, 'sc-001'))
+  })
+
+  it('does not persist scriptDir back into the YAML', async () => {
+    await saveScenario(dir, { ...validScenario, scriptDir: '/should/not/persist' } as Scenario)
+    const { readFile } = await import('node:fs/promises')
+    const yaml = await readFile(join(dir, 'sc-001.scenario.yaml'), 'utf8')
+    expect(yaml).not.toContain('scriptDir')
+  })
+
   it('skips files that are not *.scenario.yaml', async () => {
     await saveScenario(dir, validScenario)
     // Write a non-scenario file
@@ -130,7 +157,10 @@ describe('saveScenario', () => {
   it('saves and reloads a scenario round-trip', async () => {
     await saveScenario(dir, validScenario)
     const [loaded] = await loadScenarios(dir)
-    expect(loaded).toEqual(validScenario)
+    // loaded carries the runtime-only scriptDir; the persisted content matches the original.
+    const { scriptDir: _scriptDir, ...content } = loaded!
+    expect(content).toEqual(validScenario)
+    expect(_scriptDir).toBe(join(dir, 'sc-001'))
   })
 
   it('creates parent directory if it does not exist', async () => {

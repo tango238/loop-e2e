@@ -34,6 +34,18 @@ export const PreconditionSchema = z.object({
 })
 export type Precondition = z.infer<typeof PreconditionSchema>
 
+// --- Scenario-owned 2FA config ---
+// Environment-specific 2FA glue lives with the scenario (not in config). `pinCommand` is run
+// with cwd = the scenario's script dir (scenarios/<file-basename>/), so it can reference scripts
+// placed alongside the scenario (e.g. "bash get-2fa-pin.sh"). loop-e2e core stays env-agnostic.
+export const ScenarioTwoFactorSchema = z.object({
+  pinCommand: z.string().min(1),
+  pinFieldSelector: z.string().default('input[name="pin_code"]'),
+  submitSelector: z.string().default('button[type="submit"]'),
+  successUrlPattern: z.string().optional(),
+})
+export type ScenarioTwoFactor = z.infer<typeof ScenarioTwoFactorSchema>
+
 // --- Full scenario schema (spec §3) ---
 export const ScenarioSchema = z.object({
   id: z.string().min(1),
@@ -43,6 +55,7 @@ export const ScenarioSchema = z.object({
   expectedResults: z.array(ExpectedResultSchema).min(1),
   expectedDbState: z.array(ExpectedDbStateSchema),
   precondition: PreconditionSchema.optional(),
+  twoFactor: ScenarioTwoFactorSchema.optional(),
 })
 
 export type ScenarioStep = z.infer<typeof ScenarioStepSchema>
@@ -51,6 +64,13 @@ export type ExpectedDbState = z.infer<typeof ExpectedDbStateSchema>
 
 /** Full scenario type (replaces the minimal definition in domain/types.ts) */
 export type Scenario = z.infer<typeof ScenarioSchema>
+
+/**
+ * A scenario as loaded from disk, annotated with its script directory
+ * (scenarios/<file-basename>/). `scriptDir` is runtime metadata — it is NOT part of the
+ * persisted YAML schema and is stripped before saving.
+ */
+export type LoadedScenario = Scenario & { scriptDir: string }
 
 const SCENARIO_FILE_SUFFIX = '.scenario.yaml'
 
@@ -62,11 +82,18 @@ function assertValidId(id: string): void {
   }
 }
 
+/** Strip runtime-only fields (scriptDir) before persisting a scenario to YAML. */
+function persistable(scenario: Scenario): Scenario {
+  const { scriptDir: _scriptDir, ...rest } = scenario as Scenario & { scriptDir?: string }
+  return rest
+}
+
 /**
  * Load all *.scenario.yaml files from `dir`, parse, and zod-validate each.
+ * Each loaded scenario is annotated with its `scriptDir` (`<dir>/<file-basename>/`).
  * Invalid files are logged and skipped rather than throwing.
  */
-export async function loadScenarios(dir: string): Promise<Scenario[]> {
+export async function loadScenarios(dir: string): Promise<LoadedScenario[]> {
   let entries: string[]
   try {
     entries = await readdir(dir)
@@ -74,13 +101,14 @@ export async function loadScenarios(dir: string): Promise<Scenario[]> {
     return []
   }
 
-  const results: Scenario[] = []
+  const results: LoadedScenario[] = []
   for (const entry of entries) {
     if (!entry.endsWith(SCENARIO_FILE_SUFFIX)) continue
     const raw = await readYaml<unknown>(join(dir, entry))
     const parsed = ScenarioSchema.safeParse(raw)
     if (parsed.success) {
-      results.push(parsed.data)
+      const basename = entry.slice(0, -SCENARIO_FILE_SUFFIX.length)
+      results.push({ ...parsed.data, scriptDir: join(dir, basename) })
     }
   }
   return results
@@ -88,13 +116,13 @@ export async function loadScenarios(dir: string): Promise<Scenario[]> {
 
 /**
  * Save a scenario to `dir/<id>.scenario.yaml`.
- * Ensures the directory exists before writing.
+ * Ensures the directory exists before writing. Runtime-only fields (scriptDir) are not persisted.
  */
 export async function saveScenario(dir: string, scenario: Scenario): Promise<void> {
   assertValidId(scenario.id)
   await ensureDir(dir)
   const path = join(dir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`)
-  await writeYaml(path, scenario)
+  await writeYaml(path, persistable(scenario))
 }
 
 /** Subdirectory under the scenario dir where proposed (unapproved) scenarios live. */
@@ -108,7 +136,7 @@ export async function saveProposedScenario(dir: string, scenario: Scenario): Pro
   assertValidId(scenario.id)
   const proposedDir = join(dir, PROPOSED_SUBDIR)
   await ensureDir(proposedDir)
-  await writeYaml(join(proposedDir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`), scenario)
+  await writeYaml(join(proposedDir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`), persistable(scenario))
 }
 
 /** Load all proposed scenarios from `<dir>/proposed/`. */
