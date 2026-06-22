@@ -336,4 +336,23 @@ program
     }
   })
 
+program
+  .command('rdra-export')
+  .description('Export adopted scenarios into an rdra-analyzer analysis_result.json (route-matched merge + pending handoff)')
+  .option('--into <path>', 'Path to rdra-analyzer analysis_result.json (default: <cwd>/output/usecases/analysis_result.json)')
+  .option('--scenario-dir <dir>', 'Scenario directory (default: <cwd>/<config.scenarioDir>)')
+  .action(async (opts: { into?: string; scenarioDir?: string }) => {
+    const cwd = process.cwd()
+    const { runRdraExport } = await import('./commands/rdraExport.js')
+    const { rdraExport } = await import('../pipeline/rdraExport.js')
+    try {
+      const r = await runRdraExport(cwd, opts, { rdraExport, loadConfig })
+      process.stdout.write(`matched ${r.matched} → ${r.intoPath}\n`)
+      if (r.pendingPath) process.stdout.write(`pending ${r.pending} → ${r.pendingPath}\n`)
+    } catch (err) {
+      process.stderr.write(`rdra-export failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+  })
+
 program.parse()
