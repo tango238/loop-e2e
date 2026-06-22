@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { z } from 'zod'
-import { createLlm } from './client.js'
+import { createLlm, extractJson } from './client.js'
 import type { CreateLlmOptions } from './client.js'
 import type { Config } from '../../config/schema.js'
 
@@ -68,6 +68,33 @@ describe('LLM client', () => {
     expect(result).toEqual({ name: 'test', value: 42 })
   })
 
+  it('requests a generous max_tokens so large extractions are not truncated', async () => {
+    const fakeClient = makeFakeClient('hello')
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
+    await llm.complete('planning', 'prompt')
+    expect(fakeClient.messages.create.mock.calls[0][0].max_tokens).toBeGreaterThanOrEqual(8192)
+  })
+
+  it('parses JSON wrapped in markdown code fences (no retry needed)', async () => {
+    const schema = z.object({ ok: z.boolean() })
+    const fenced = '```json\n{ "ok": true }\n```'
+    const fakeClient = makeFakeClient(fenced)
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
+    const result = await llm.complete('planning', 'prompt', schema)
+    expect(result).toEqual({ ok: true })
+    expect(fakeClient.messages.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('parses JSON surrounded by prose (no retry needed)', async () => {
+    const schema = z.object({ value: z.number() })
+    const prose = 'Sure, here is the result:\n{ "value": 7 }\nLet me know if you need more.'
+    const fakeClient = makeFakeClient(prose)
+    const llm = createLlm('test-api-key', models, { client: fakeClient as unknown as CreateLlmOptions['client'] })
+    const result = await llm.complete('planning', 'prompt', schema)
+    expect(result).toEqual({ value: 7 })
+    expect(fakeClient.messages.create).toHaveBeenCalledTimes(1)
+  })
+
   it('retries on invalid JSON and eventually throws after max attempts', async () => {
     const schema = z.object({ name: z.string() })
     const fakeClient = {
@@ -103,5 +130,26 @@ describe('LLM client', () => {
     const result = await llm.complete('planning', 'prompt', schema)
     expect(result).toEqual({ ok: true })
     expect(fakeClient.messages.create).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('extractJson', () => {
+  it('strips ```json fences', () => {
+    expect(extractJson('```json\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+  it('strips bare ``` fences', () => {
+    expect(extractJson('```\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+  it('slices an object out of surrounding prose', () => {
+    expect(extractJson('here:\n{"a":1}\nthanks')).toBe('{"a":1}')
+  })
+  it('slices an array out of surrounding prose', () => {
+    expect(extractJson('result: [1,2,3] done')).toBe('[1,2,3]')
+  })
+  it('returns plain JSON unchanged (trimmed)', () => {
+    expect(extractJson('  {"a":1}  ')).toBe('{"a":1}')
+  })
+  it('returns the trimmed input when no JSON region is present', () => {
+    expect(extractJson('no json here')).toBe('no json here')
   })
 })

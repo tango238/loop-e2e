@@ -130,12 +130,16 @@ export async function executeLoginScenario(
   const afterSubmitUrl = page.url()
 
   if (urlMatchesPath(afterSubmitUrl, loginPath)) {
-    logger.info({ finalUrl: afterSubmitUrl }, 'Login appears to have failed — still on login page')
-    return {
-      ok: false,
-      detail: `login rejected: credentials not accepted (still on ${loginPath})`,
-      finalUrl: afterSubmitUrl,
-    }
+    // Stayed on the login path. Distinguish a real credential rejection (the page shows a
+    // validation/error message) from a submit that produced no visible error — the latter
+    // usually means the request never completed (CORS/network/backend down), NOT bad creds.
+    const errorText = await readVisibleError(page)
+    const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
+    const detail = errorText
+      ? `login rejected: error shown on ${loginPath}: "${maskSecrets(errorText, secrets)}"`
+      : `login did not advance past ${loginPath} and no error was shown — the request likely did not complete (check CORS/network/backend, or that the setup hook ran)`
+    logger.info({ finalUrl: afterSubmitUrl, hadError: Boolean(errorText) }, 'Login appears to have failed — still on login page')
+    return { ok: false, detail, finalUrl: afterSubmitUrl }
   }
 
   // If 2FA is configured AND the credential submit landed on a 2FA page, complete it.
@@ -219,6 +223,21 @@ async function runTwoFactorStep(
 /** Heuristic: does this URL look like a 2-factor / OTP verification page? */
 function looksLikeTwoFactorPage(url: string): boolean {
   return /two-?factor|2fa|otp|mfa|verify/i.test(url)
+}
+
+// First error/alert container's text (trailing (?![a-z]) avoids "errorless" etc.).
+const LOGIN_ERROR_REGEX =
+  /<[a-z0-9]+[^>]*(?:class|id)=["'][^"']*(?:error|alert|invalid|danger|fail)(?![a-z])[^"']*["'][^>]*>([\s\S]*?)<\/[a-z0-9]+>/i
+
+/** Read the first visible error-message text on the page (e.g. "メールアドレスまたはパスワードが違います"). */
+async function readVisibleError(page: PageLike): Promise<string> {
+  try {
+    const m = LOGIN_ERROR_REGEX.exec(await page.content())
+    if (!m) return ''
+    return m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)
+  } catch {
+    return ''
+  }
 }
 
 /**
