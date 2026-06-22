@@ -1,8 +1,9 @@
 # loop-e2e — rdra-analyzer-export 設計仕様書
 
-- **ステータス**: ドラフト（レビュー待ち）
+- **ステータス**: 合意確定（rdra-analyzer 側サインオフ済み・2026-06-22 デルタ反映）
 - **作成日**: 2026-06-22
 - **対象**: 既存 loop-e2e CLI への増分拡張（新コマンド `rdra-export`）
+- **連携契約**: `/tmp/loop-e2e-agreed-contract-handoff.md`（合意デルタ 1〜6）を §3/§4/§7 に反映済み
 
 ---
 
@@ -55,17 +56,22 @@ loop-e2e は rdra の `analysis_result.json` を読み、**ルートで当たっ
 
 ---
 
+> **合意デルタ（2026-06-22, rdra-analyzer 側サインオフ済み）を反映**。実出力(Spotly)では UC の
+> `related_pages` が空・`related_routes` が `"<METHOD> <path>"` 形式のAPIルートのため、navigate 単独照合では
+> 当たり率≒0。**APIルートを第2照合キーに追加**し、**共有 `normalizeRoute`**（先頭METHODトークン除去＋path正規化）で
+> 両者同一判定する。`api_endpoint` の扱いは [C修正版]（pending のみ構造化、merged は単数文字列）。
+
 ## 3. 変換（loop-e2e Scenario → OperationScenario）
 
 | OperationScenario | loop-e2e 由来 |
 |---|---|
 | `scenario_id` | `LE-<scenario.id>`（出所タグ） |
-| `usecase_id` | §4 のルート照合結果（当たり時のみ） |
+| `usecase_id` | §4 の照合結果（当たり時のみ） |
 | `usecase_name` | 照合した usecase の `name` |
 | `scenario_name` | `scenario.title` |
 | `scenario_type` | 既定 `"normal"` |
 | `frontend_url` | 最初の `navigate` ステップの target（パス） |
-| `api_endpoint` | `expectedResults` の `kind==='api'` の最初の `assertion`（無ければ `""`） |
+| `api_endpoint`（**単数 string**） | 各シナリオの最初のAPIエンドポイントから再構成: `method&path` があれば `"<METHOD> <path>"`／無ければ `path`／無ければ `raw`／最終 `""`。**配列を入れない**（rdra は `api_endpoint` を単数文字列でしか読まないため） |
 | `steps[].step_no` | 1始まりの連番 |
 | `steps[].actor` | 既定 `"ユーザー"` |
 | `steps[].action` | `step.action` ＋ `step.target`（例: `navigate /hotel`） |
@@ -73,16 +79,43 @@ loop-e2e は rdra の `analysis_result.json` を読み、**ルートで当たっ
 | `steps[].ui_element` | `step.target` |
 | `variations` | `[]` |
 
+### APIエンドポイントの抽出（`ApiEndpoint = { method, path, raw }`）
+loop-e2e の `expectedResults` の `kind==='api'` 各要素から `ApiEndpoint` を作る:
+- 任意の構造化フィールド `apiEndpoint: { method?, path }` があればそれを優先（`method` 省略時 `"ANY"`）。`raw` には `assertion` 原文。
+- 無ければ `assertion`（=`raw`）を **best-effort パース**: 先頭METHODトークン（GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/ANY, 任意）＋続くパス（空白まで）を抽出。取れなければ `method=null, path=null`、`raw` は常に同梱。
+- 生成プロンプトで源泉から構造化（`apiEndpoint:{method,path}`）するのは**別フォローアップ**（本specスコープ外）。それまでは best-effort で動く。
+
 ---
 
-## 4. ルート照合（当たり/外れ判定）
+## 4. 照合（当たり/外れ判定）— 二キー＋共有正規化
 
-`src/services/rdra/match.ts`:
-- `normalizePath(url)`: origin 除去・クエリ/フラグメント除去・末尾スラッシュ除去（`/` は維持）。フルURL/相対パス両対応。
-- loop-e2e シナリオの **最初の `navigate` target** を正規化したパス（無ければ外れ扱い）。
-- usecase 候補: `usecases[]` の各 `related_routes` ∪ `related_pages` を正規化し比較。
-- 一致規則: **完全一致 > パスプレフィックス一致**。複数候補は完全一致を優先、同点なら最初の usecase。
-- 当たり → その `usecase_id`/`name` を採用。外れ → 保留へ。
+`src/services/rdra/match.ts`。**loop-e2e と rdra-analyzer は同一の `normalizeRoute` を実装する**（合意）。
+
+```
+normalizePath(url): origin/query/fragment 除去・末尾"/"除去（root "/" は維持）。フルURL/相対パス両対応。
+normalizeRoute(s):
+  t = s.trim()
+  m = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY)\s+/i に一致?
+  method = 一致 ? 大文字化 : "ANY"
+  path   = normalizePath(一致部分を除いた残り)
+  → { method, path }
+methodMatches(a,b): a==="ANY" || b==="ANY" || a===b
+routeKeyEquals(x,y): methodMatches(x.method,y.method) && x.path===y.path
+```
+
+照合キー:
+- **navigate キー** = `{ method:"ANY", path: normalizePath(最初のnavigate target) }`（navigate 無し→navigateキー無し）。
+- **api キー** = 各 `ApiEndpoint` の `{ method:method??"ANY", path }`（`path` が null のものはスキップ）。
+
+usecase 候補ルート = 各 UC の `related_routes ∪ related_pages` を `normalizeRoute` したタプル集合。
+
+**優先度（同点は最初の usecase）**:
+1. `navigate exact`（navigateキー と完全一致＝routeKeyEquals）
+2. `api exact`（いずれかの apiキー と完全一致）
+3. `navigate prefix`（UCルートが navigate path のプレフィックス: `path.startsWith(route.path + "/")` かつ method 整合）
+4. `api prefix`（同上を apiキーで）
+
+いずれも当たらなければ保留（pending）へ。
 
 ---
 
@@ -117,14 +150,15 @@ loop-e2e は rdra の `analysis_result.json` を読み、**ルートで当たっ
       "scenario_name": "View hotel page",
       "frontend_url": "/hotel",
       "navigate_routes": ["/hotel"],
-      "api_endpoints": ["GET /api/v2/.../hotels"],
+      "api_endpoints": [ { "method": "GET", "path": "/api/v2/.../hotels", "raw": "GET /api/v2/.../hotels returns 200" } ],
       "steps": [ { "step_no": 1, "actor": "ユーザー", "action": "navigate /hotel",
                    "expected_result": "Hotel page loads", "ui_element": "/hotel" } ],
       "reason": "no matching usecase by route" }
   ]
 }
 ```
-保留が 0 件ならこのファイルは出力しない（or 空配列で出力）。**既定: 0件なら出力しない**。
+- `api_endpoints` は **`{ method, path, raw }[]`**（構造化。reconcile が自前パース）。`method`/`path` が取れない場合は `null`、`raw` は常に同梱。`navigate_routes[]` は全 navigate を正規化して保持。
+- 保留が 0 件ならこのファイルは出力しない。**既定: 0件なら出力しない**。
 
 ---
 

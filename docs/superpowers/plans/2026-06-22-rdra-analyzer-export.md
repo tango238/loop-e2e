@@ -13,6 +13,7 @@
 - TypeScript strict + ESM; every task MUST pass `pnpm build` (tsc), `pnpm test`, `pnpm lint` before commit. (vitest/esbuild does NOT type-check — run `pnpm build` per task.)
 - All fs I/O injected via deps; unit tests run in-memory — no real filesystem fixtures unless the task is an integration test using a tmp dir.
 - loop-e2e-origin scenarios are tagged `scenario_id = "LE-" + scenario.id`; re-export removes existing `LE-` scenarios and re-adds (idempotent). `usecases[]` and non-`LE-` scenarios are preserved untouched. Unknown top-level fields of the analysis file are preserved.
+- **Agreed delta (rdra-analyzer signed off, `/tmp/loop-e2e-agreed-contract-handoff.md`):** matching uses TWO keys (navigate + API route) with a shared `normalizeRoute` (strip leading METHOD token, `ANY`=wildcard, then path-normalize), priority `navigate exact > api exact > navigate prefix > api prefix`. The merged OperationScenario's `api_endpoint` stays a SINGLE STRING (`"<METHOD> <path>"`/path/raw/`""`) — never an array (rdra reads it as a single string). `loop-e2e-pending.json` `api_endpoints` is `{ method, path, raw }[]`. API endpoints are best-effort parsed from each `kind:'api'` expectedResult's `assertion` (a structured `apiEndpoint:{method,path}` field is used if present; source-prompt structuring is a separate follow-up).
 - The written `analysis_result.json` MUST be referentially valid (every `scenarios[].usecase_id` exists in `usecases[]`); validation failure throws and the file is NOT written.
 - Unmatched scenarios go to `loop-e2e-pending.json` in the same directory as `--into`; if 0 unmatched, the pending file is NOT written.
 - No secrets involved; `step.input` values are NOT copied into OperationScenario (ui_element = target only).
@@ -22,6 +23,8 @@
 ---
 
 ### Task 1: Types + convert (Scenario → OperationScenario / PendingEntry)
+
+> **AGREED-DELTA OVERRIDE (spec §3):** Add `ApiEndpoint = { method: string | null; path: string | null; raw: string }`. `PendingEntry.api_endpoints` is `ApiEndpoint[]` (NOT `string[]`). convert exposes `parseApiEndpoint(raw): ApiEndpoint` (best-effort: leading METHOD token + path; structured `apiEndpoint:{method,path}` on the expectedResult wins if present), `apiEndpoints(scenario): ApiEndpoint[]`, and `apiEndpointString(eps): string` = first endpoint → `"<METHOD> <path>"` (both present) / `path` / `raw` / `""`. `toOperationScenario.api_endpoint` uses `apiEndpointString` (single string, never array). `toPendingEntry.api_endpoints` uses `apiEndpoints()` (structured). The code blocks below are superseded where they conflict with this note.
 
 **Files:**
 - Create: `src/services/rdra/types.ts`
@@ -237,7 +240,9 @@ git commit -m "feat(rdra): types + Scenario→OperationScenario/PendingEntry con
 
 ---
 
-### Task 2: Route matching
+### Task 2: Route matching (two-key + shared normalizeRoute)
+
+> **AGREED-DELTA OVERRIDE (spec §4):** Implement `normalizeRoute(s): { method, path }` (strip leading METHOD token GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS/ANY → `method` upper-cased, else `"ANY"`; then `normalizePath` the rest), `methodMatches(a,b)` (`a==="ANY" || b==="ANY" || a===b`), `routeKeyEquals(x,y)`. `matchUsecase(scenario, usecases)` matches on TWO keys: navigate key `{method:"ANY", path: normalizePath(firstNavigateTarget)}` and api keys (from `apiEndpoints(scenario)`, skipping `path===null`, method `??"ANY"`). UC candidate routes = `related_routes ∪ related_pages` each `normalizeRoute`'d. Priority across all usecases: (1) navigate exact, (2) api exact, (3) navigate prefix (`path.startsWith(route.path + "/")` + methodMatches), (4) api prefix; same priority → first usecase. The single-key code below is superseded by this note.
 
 **Files:**
 - Create: `src/services/rdra/match.ts`
