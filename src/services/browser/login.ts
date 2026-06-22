@@ -123,7 +123,9 @@ export async function executeLoginScenario(
   // SPA logins POST asynchronously then navigate client-side — `waitForLoadState`
   // can resolve before that route change. Wait for the URL to actually leave the
   // login path (up to navTimeoutMs) before deciding success/failure.
-  await waitForUrlToLeave(page, loginPath, deps.navTimeoutMs ?? 8000, deps.sleep ?? defaultSleep)
+  const navTimeoutMs = deps.navTimeoutMs ?? 8000
+  const sleep = deps.sleep ?? defaultSleep
+  await waitForUrl(page, (u) => !urlMatchesPath(u, loginPath), navTimeoutMs, sleep)
 
   const afterSubmitUrl = page.url()
 
@@ -143,7 +145,7 @@ export async function executeLoginScenario(
   const twoFactor = target.auth?.twoFactor
   if (twoFactor && looksLikeTwoFactorPage(afterSubmitUrl)) {
     const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
-    return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets)
+    return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets, navTimeoutMs, sleep)
   }
 
   logger.info({ finalUrl: afterSubmitUrl }, 'Login succeeded')
@@ -165,6 +167,8 @@ async function runTwoFactorStep(
   loginPath: string,
   pinRunner: ComposeRunner,
   secrets: string[],
+  navTimeoutMs: number,
+  sleep: (ms: number) => Promise<void>,
 ): Promise<LoginResult> {
   let stdout = ''
   try {
@@ -193,10 +197,16 @@ async function runTwoFactorStep(
     return { ok: false, detail: `2FA failed: ${maskSecrets(sanitizeError(err), maskWith)}`, finalUrl: page.url() }
   }
 
+  // The 2FA verify is also an async POST + client-side navigation — wait for the
+  // URL to leave the 2FA/login page before judging (same reason as the login submit).
+  const succeeded = (u: string): boolean =>
+    twoFactor.successUrlPattern
+      ? new RegExp(twoFactor.successUrlPattern).test(u)
+      : !urlMatchesPath(u, loginPath) && !looksLikeTwoFactorPage(u)
+  await waitForUrl(page, succeeded, navTimeoutMs, sleep)
+
   const finalUrl = page.url()
-  const ok = twoFactor.successUrlPattern
-    ? new RegExp(twoFactor.successUrlPattern).test(finalUrl)
-    : !urlMatchesPath(finalUrl, loginPath) && !finalUrl.toLowerCase().includes('two-factor')
+  const ok = succeeded(finalUrl)
 
   const safeUrl = maskSecrets(finalUrl, maskWith)
   if (!ok) {
@@ -212,19 +222,19 @@ function looksLikeTwoFactorPage(url: string): boolean {
 }
 
 /**
- * Poll until the page URL no longer matches `loginPath`, or until `timeoutMs`
- * elapses. Handles SPA client-side navigation that `waitForLoadState` misses.
+ * Poll until `predicate(url)` is true, or until `timeoutMs` elapses. Handles
+ * SPA client-side navigation that `waitForLoadState` resolves too early for.
  */
-async function waitForUrlToLeave(
+async function waitForUrl(
   page: PageLike,
-  loginPath: string,
+  predicate: (url: string) => boolean,
   timeoutMs: number,
   sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
   const intervalMs = 250
   const attempts = Math.max(0, Math.ceil(timeoutMs / intervalMs))
   for (let i = 0; i < attempts; i++) {
-    if (!urlMatchesPath(page.url(), loginPath)) return
+    if (predicate(page.url())) return
     await sleep(intervalMs)
   }
 }
