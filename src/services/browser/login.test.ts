@@ -95,7 +95,7 @@ describe('executeLoginScenario', () => {
       click: vi.fn(async () => {}), // no URL change
     }))
 
-    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds, { navTimeoutMs: 0 })
 
     expect(result.ok).toBe(false)
     expect(result.detail).toBeTruthy()
@@ -194,11 +194,31 @@ describe('executeLoginScenario', () => {
       click: vi.fn(async () => {}), // URL stays on /login
     }))
 
-    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds)
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds, { navTimeoutMs: 0 })
 
     expect(result.ok).toBe(false)
     expect(result.detail).toMatch(/^login rejected:/)
     expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('waits for a delayed client-side navigation away from the login path', async () => {
+    // Simulate a SPA: url stays on /login right after click, then changes on a later poll.
+    const page = makeFakePage({ currentUrl: 'http://localhost:3000/login' })
+    let polls = 0
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      fill: vi.fn(async () => {}),
+      click: vi.fn(async () => {}), // no immediate url change
+    }))
+    ;(page.url as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      // first checks see /login, then it "navigates" to /dashboard
+      polls += 1
+      return polls >= 3 ? 'http://localhost:3000/dashboard' : 'http://localhost:3000/login'
+    })
+    const sleep = vi.fn(async () => {})
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds, { navTimeoutMs: 5000, sleep })
+    expect(result.ok).toBe(true)
+    expect(result.finalUrl).toContain('/dashboard')
+    expect(sleep).toHaveBeenCalled() // it polled while waiting
   })
 
   it('detail starts with "login succeeded:" on successful login', async () => {
@@ -229,7 +249,7 @@ describe('executeLoginScenario', () => {
       fill: vi.fn(async () => {}),
       click: vi.fn(async () => {}),
     }))
-    const rejResult = await executeLoginScenario(rejPage, baseTarget, loginScenario, creds)
+    const rejResult = await executeLoginScenario(rejPage, baseTarget, loginScenario, creds, { navTimeoutMs: 0 })
 
     expect(navResult.ok).toBe(false)
     expect(rejResult.ok).toBe(false)
