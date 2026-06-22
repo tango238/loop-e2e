@@ -130,7 +130,7 @@ export type DiffFinding = {
 }
 
 export type VerifyFinding = {
-  category: 'layout' | 'security' | 'conditional' | 'registered-data' | 'error-handling' | 'login' | 'scenario'
+  category: 'layout' | 'security' | 'conditional' | 'registered-data' | 'error-handling' | 'login' | 'scenario' | 'input-validation'
   severity: 'high' | 'medium' | 'low'
   title: string
   detail: string
