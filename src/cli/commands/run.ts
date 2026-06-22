@@ -4,6 +4,7 @@ import type { CollectResult } from '../../pipeline/collect.js'
 import type { WriteReportDeps } from '../../pipeline/report.js'
 import type { RunVerifyDeps } from '../../pipeline/verify/index.js'
 import type { Scenario } from '../../scenario/schema.js'
+import { isLoginScenario } from '../../scenario/loginScenario.js'
 import type { DbDriverOptions } from '../../services/db/index.js'
 import type { PageLike } from '../../services/browser/crawler.js'
 import type { LoginResult } from '../../services/browser/login.js'
@@ -229,37 +230,6 @@ const emptyPrior: PriorState = {
   baseline: null,
   latestReport: null,
   feedback: [],
-}
-
-/**
- * Returns true if the scenario looks like a login scenario.
- * Primary signal: any step navigates to the exact loginPath.
- * Secondary signal (title text) requires corroboration — the scenario must also have
- * a credential-action step (fill/submit/login) targeting the loginPath; title text alone
- * is not sufficient to avoid false-positives like "Logout redirects to login".
- */
-function isLoginScenario(scenario: Scenario, loginPath?: string): boolean {
-  // Primary: exact path match
-  if (loginPath && scenario.steps.some((s) => s.target === loginPath)) {
-    return true
-  }
-
-  // Secondary: title/businessFlow mentions login only when there is also a
-  // credential-action step targeting the loginPath
-  if (loginPath) {
-    const text = `${scenario.title} ${scenario.businessFlow}`.toLowerCase()
-    const mentionsLogin = text.includes('login') || text.includes('sign in') || text.includes('signin')
-    const hasCredentialStep = scenario.steps.some(
-      (s) =>
-        s.target === loginPath &&
-        (s.action === 'fill' || s.action === 'submit' || s.action === 'login'),
-    )
-    if (mentionsLogin && hasCredentialStep) {
-      return true
-    }
-  }
-
-  return false
 }
 
 /**
