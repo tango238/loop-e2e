@@ -22,6 +22,21 @@ export type LoginDeps = {
   navTimeoutMs?: number
   /** Injectable sleep for deterministic tests (default real setTimeout). */
   sleep?: (ms: number) => Promise<void>
+  /**
+   * Returns the latest auth-endpoint HTTP response observed on the page (status + body),
+   * wired from a Playwright response listener. Used to explain login/2FA failures precisely
+   * (e.g. "HTTP 422: 登録情報と一致しませんでした") instead of guessing — the app may show the
+   * error only as an auto-dismissing toast that is gone by the time the DOM is scanned.
+   */
+  getAuthResponse?: () => { status: number; bodyText?: string } | null
+}
+
+/** One-line description of the captured auth response, masked, or null if none captured. */
+function describeAuthResponse(getAuthResponse: LoginDeps['getAuthResponse'], secrets: string[]): string | null {
+  const r = getAuthResponse?.()
+  if (!r) return null
+  const body = r.bodyText ? `: ${maskSecrets(r.bodyText, secrets).slice(0, 300)}` : ''
+  return `auth API responded HTTP ${r.status}${body}`
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -130,15 +145,22 @@ export async function executeLoginScenario(
   const afterSubmitUrl = page.url()
 
   if (urlMatchesPath(afterSubmitUrl, loginPath)) {
-    // Stayed on the login path. Distinguish a real credential rejection (the page shows a
-    // validation/error message) from a submit that produced no visible error — the latter
-    // usually means the request never completed (CORS/network/backend down), NOT bad creds.
-    const errorText = await readVisibleError(page)
+    // Stayed on the login path. Prefer the captured auth-API response (status + body) — it is the
+    // ground truth. Fall back to a visible error element, then to "request likely did not complete"
+    // (CORS/network/backend) when there is neither — the app may show errors only as toasts that
+    // auto-dismiss before the DOM is scanned.
     const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
-    const detail = errorText
-      ? `login rejected: error shown on ${loginPath}: "${maskSecrets(errorText, secrets)}"`
-      : `login did not advance past ${loginPath} and no error was shown — the request likely did not complete (check CORS/network/backend, or that the setup hook ran)`
-    logger.info({ finalUrl: afterSubmitUrl, hadError: Boolean(errorText) }, 'Login appears to have failed — still on login page')
+    const authDesc = describeAuthResponse(deps.getAuthResponse, secrets)
+    const errorText = authDesc ? '' : await readVisibleError(page)
+    const detail = authDesc
+      ? `login rejected: ${authDesc}`
+      : errorText
+        ? `login rejected: error shown on ${loginPath}: "${maskSecrets(errorText, secrets)}"`
+        : `login did not advance past ${loginPath} and no error was shown — the request likely did not complete (check CORS/network/backend, or that the setup hook ran)`
+    logger.info(
+      { finalUrl: afterSubmitUrl, hadAuthResponse: Boolean(authDesc), hadError: Boolean(errorText) },
+      'Login appears to have failed — still on login page',
+    )
     return { ok: false, detail, finalUrl: afterSubmitUrl }
   }
 
@@ -149,7 +171,7 @@ export async function executeLoginScenario(
   const twoFactor = target.auth?.twoFactor
   if (twoFactor && looksLikeTwoFactorPage(afterSubmitUrl)) {
     const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
-    return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets, navTimeoutMs, sleep)
+    return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets, navTimeoutMs, sleep, deps.getAuthResponse)
   }
 
   logger.info({ finalUrl: afterSubmitUrl }, 'Login succeeded')
@@ -173,6 +195,7 @@ async function runTwoFactorStep(
   secrets: string[],
   navTimeoutMs: number,
   sleep: (ms: number) => Promise<void>,
+  getAuthResponse?: LoginDeps['getAuthResponse'],
 ): Promise<LoginResult> {
   let stdout = ''
   try {
@@ -214,7 +237,9 @@ async function runTwoFactorStep(
 
   const safeUrl = maskSecrets(finalUrl, maskWith)
   if (!ok) {
-    return { ok: false, detail: `2FA failed: still not authenticated (at ${safeUrl})`, finalUrl }
+    const authDesc = describeAuthResponse(getAuthResponse, maskWith)
+    const reason = authDesc ? `: ${authDesc}` : ` (at ${safeUrl})`
+    return { ok: false, detail: `2FA failed: still not authenticated${reason}`, finalUrl }
   }
   logger.info({ finalUrl }, '2FA passed; login succeeded')
   return { ok: true, detail: `login succeeded: 2FA passed, navigated to ${safeUrl}`, finalUrl }

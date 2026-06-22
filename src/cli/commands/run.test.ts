@@ -339,6 +339,58 @@ describe('runRun', () => {
     expect(loginFinding.detail).not.toContain('wrongpass')
   })
 
+  it('forwards target twoFactor config and loginDeps into executeLogin', async () => {
+    const loginScenario = {
+      id: 'sc-2fa',
+      title: 'User login',
+      businessFlow: 'User logs in',
+      steps: [
+        { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
+        { action: 'submit', target: 'button[type=submit]', expectedOutcome: 'Submitted' },
+      ],
+      expectedResults: [{ kind: 'ui' as const, description: 'Dashboard', assertion: 'URL is /' }],
+      expectedDbState: [],
+    }
+    const executeLogin = vi.fn().mockResolvedValue({ ok: true, detail: 'ok', finalUrl: 'http://localhost:3000/' })
+    const fakePage = { goto: vi.fn(), url: vi.fn(() => 'http://localhost:3000/'), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn() }
+    const loginDeps = { getAuthResponse: () => ({ status: 422, bodyText: 'x' }) }
+    const twoFactor = { pinCommand: 'echo 123456', pinFieldSelector: 'input[name="pin_code"]', submitSelector: 'button[type="submit"]' }
+
+    await runRun('/tmp/root', {}, {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn(),
+      clock: () => 'run-2fa',
+      scenarios: [loginScenario],
+      ctx: {
+        root: '/tmp/root',
+        runId: 'run-2fa',
+        config: {
+          repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend' as const, audience: 'user' as const }],
+          targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD', twoFactor } }],
+          databases: [],
+          schedule: { intervalMinutes: 60 },
+          scenarioDir: 'scenarios',
+          github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+          baseline: { commit: false },
+          models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+          ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+          refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+        },
+        secrets: { db: {}, targetAuth: { USERNAME: 'u@example.com', PASSWORD: 'pw' }, anthropicApiKey: '', githubToken: '' },
+      },
+      executeLogin,
+      loginDeps,
+      createPage: vi.fn().mockResolvedValue(fakePage),
+    })
+
+    expect(executeLogin).toHaveBeenCalledOnce()
+    const [, passedTarget, , , passedDeps] = executeLogin.mock.calls[0]
+    expect(passedTarget.auth.twoFactor).toEqual(twoFactor)
+    expect(passedDeps).toBe(loginDeps)
+  })
+
   it('skips login execution when no login scenario is present', async () => {
     const nonLoginScenario = {
       id: 'sc-002',

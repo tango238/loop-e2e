@@ -103,6 +103,36 @@ describe('executeLoginScenario', () => {
     expect(result.finalUrl).toContain('/login')
   })
 
+  it('prefers the captured auth-API response (status + masked body) in the failure detail', async () => {
+    const page = makeFakePage({
+      currentUrl: 'http://localhost:3000/login',
+      // Toast already gone from the DOM — no inline error element present.
+      pageContent: '<html><body><form></form></body></html>',
+    })
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({ fill: vi.fn(async () => {}), click: vi.fn(async () => {}) }))
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds, {
+      navTimeoutMs: 0,
+      getAuthResponse: () => ({ status: 422, bodyText: '{"validation_errors":{"email":["登録情報と一致しませんでした。"]}}' }),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.detail).toContain('HTTP 422')
+    expect(result.detail).toContain('一致しませんでした')
+    expect(result.detail).not.toContain(creds.password)
+  })
+
+  it('masks the email/secret values out of the captured auth-response body', async () => {
+    const page = makeFakePage({ currentUrl: 'http://localhost:3000/login', pageContent: '<form></form>' })
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({ fill: vi.fn(async () => {}), click: vi.fn(async () => {}) }))
+    const result = await executeLoginScenario(page, baseTarget, loginScenario, creds, {
+      navTimeoutMs: 0,
+      secrets: [creds.username],
+      getAuthResponse: () => ({ status: 401, bodyText: `denied for ${creds.username} / ${creds.password}` }),
+    })
+    expect(result.detail).toContain('HTTP 401')
+    expect(result.detail).not.toContain(creds.username)
+    expect(result.detail).not.toContain(creds.password)
+  })
+
   it('distinguishes a shown error from a silent non-advance (CORS/network)', async () => {
     // Error shown → "error shown" wording with the (masked) message
     const errPage = makeFakePage({
