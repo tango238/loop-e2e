@@ -68,4 +68,32 @@ describe('proposeScenarios', () => {
     expect(extractPageInfo).not.toHaveBeenCalled()
     expect(llm.complete).not.toHaveBeenCalled()
   })
+
+  it('proposes in batches (bounded response) and isolates a failing batch', async () => {
+    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
+    let call = 0
+    const llm = {
+      complete: vi.fn(async () => {
+        call += 1
+        if (call === 2) throw new Error('LLM structured output failed: truncated JSON')
+        return [validScenario(`s${call}`)]
+      }),
+    } as unknown as Llm
+    const pages = Array.from({ length: 12 }, (_, i) => rawPage(`http://x/p${i}`))
+    const result = await proposeScenarios(llm, pages, { extractPageInfo, batchSize: 5 })
+    expect(extractPageInfo).toHaveBeenCalledTimes(12)
+    expect(llm.complete).toHaveBeenCalledTimes(3) // ceil(12/5) batches
+    expect(result.length).toBe(2) // batch 2 threw → scenarios from batches 1 and 3 only
+  })
+
+  it('skips a page whose extraction fails without aborting', async () => {
+    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => {
+      if (raw.url.endsWith('/bad')) throw new Error('extract boom')
+      return pageInfo(raw.url)
+    })
+    const llm = makeLlm([validScenario('ok')])
+    const result = await proposeScenarios(llm, [rawPage('http://x/good'), rawPage('http://x/bad')], { extractPageInfo })
+    expect(extractPageInfo).toHaveBeenCalledTimes(2)
+    expect(result.length).toBe(1) // 1 page survived → 1 batch → proposal returned
+  })
 })

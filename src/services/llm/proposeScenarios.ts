@@ -11,13 +11,21 @@ const ScenarioArraySchema = z.array(ScenarioSchema)
 export type ProposeDeps = {
   /** Override page-info extraction for testing */
   extractPageInfo?: (llm: Llm, raw: RawPage) => Promise<PageInfo>
+  /** Pages per LLM proposal call. Bounds the response size so it isn't truncated (default 5). */
+  batchSize?: number
 }
+
+/** Default number of pages proposed per LLM call. */
+const DEFAULT_BATCH_SIZE = 5
 
 /**
  * Propose E2E scenarios (Opus) for discovered pages that no existing scenario
  * covers. Each uncovered page is first structured into PageInfo, then the
- * planning LLM proposes scenarios (zod-validated). Returned scenario ids are
- * normalized to be unique and `grow-` prefixed.
+ * planning LLM proposes scenarios (zod-validated) in **batches** so a large set
+ * of pages never overflows the model's output limit (which truncated the JSON
+ * and failed the whole run). Per-page extraction and per-batch proposal failures
+ * are isolated — a single failure skips that page/batch instead of aborting grow.
+ * Returned scenario ids are normalized to be unique and `grow-` prefixed.
  */
 export async function proposeScenarios(
   llm: Llm,
@@ -27,19 +35,42 @@ export async function proposeScenarios(
   if (uncovered.length === 0) return []
 
   const extract = deps.extractPageInfo ?? defaultExtractPageInfo
-  logger.info({ count: uncovered.length }, 'Proposing scenarios for uncovered pages')
+  const batchSize = Math.max(1, deps.batchSize ?? DEFAULT_BATCH_SIZE)
+  logger.info({ count: uncovered.length, batchSize }, 'Proposing scenarios for uncovered pages')
 
   const pageInfos: PageInfo[] = []
   for (const raw of uncovered) {
-    pageInfos.push(await extract(llm, raw))
+    try {
+      pageInfos.push(await extract(llm, raw))
+    } catch (err) {
+      logger.warn({ err: String(err), url: raw.url }, 'page-info extraction failed — skipping page')
+    }
   }
 
-  const prompt = buildProposePrompt(pageInfos)
-  const scenarios = await llm.complete('planning', prompt, ScenarioArraySchema)
+  const proposed: Scenario[] = []
+  for (const batch of chunk(pageInfos, batchSize)) {
+    try {
+      const prompt = buildProposePrompt(batch)
+      const scenarios = await llm.complete('planning', prompt, ScenarioArraySchema)
+      proposed.push(...scenarios)
+    } catch (err) {
+      logger.warn(
+        { err: String(err), pages: batch.map((p) => p.url), size: batch.length },
+        'scenario proposal batch failed — skipping batch',
+      )
+    }
+  }
 
-  const normalized = normalizeIds(scenarios)
+  const normalized = normalizeIds(proposed)
   logger.info({ count: normalized.length }, 'Scenarios proposed')
   return normalized
+}
+
+/** Split an array into consecutive chunks of at most `size`. */
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
 }
 
 /** Ensure every proposed scenario has a unique `grow-`-prefixed id. */
