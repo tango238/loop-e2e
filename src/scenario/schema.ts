@@ -26,6 +26,12 @@ export const ExpectedDbStateSchema = z.object({
   expectedValues: z.record(z.string(), z.unknown()),
 })
 
+// --- Auth precondition (scenario-exec-engine) ---
+export const PreconditionSchema = z.object({
+  auth: z.enum(['authenticated', 'unauthenticated']),
+})
+export type Precondition = z.infer<typeof PreconditionSchema>
+
 // --- Full scenario schema (spec §3) ---
 export const ScenarioSchema = z.object({
   id: z.string().min(1),
@@ -34,6 +40,7 @@ export const ScenarioSchema = z.object({
   steps: z.array(ScenarioStepSchema).min(1),
   expectedResults: z.array(ExpectedResultSchema).min(1),
   expectedDbState: z.array(ExpectedDbStateSchema),
+  precondition: PreconditionSchema.optional(),
 })
 
 export type ScenarioStep = z.infer<typeof ScenarioStepSchema>

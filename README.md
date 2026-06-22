@@ -47,7 +47,7 @@ loop-e2e scenario --from docs/requirements.md docs/api.md
 Runs the full verification pipeline:
 
 ```
-prepare (repo refresh → setup hooks) → collect → diff → verify → (login) → report
+prepare (repo refresh → setup hooks) → collect → diff → verify → (login) → (scenarios) → report
 ```
 
 **Stages:**
@@ -56,12 +56,57 @@ prepare (repo refresh → setup hooks) → collect → diff → verify → (logi
 2. **collect** — Crawls the target app with Playwright, extracts structured page info with Claude.
 3. **diff** — Compares current structure against baseline; detects missing transitions, changed items, expectation gaps.
 4. **verify** — Runs 5 verify categories: layout, security, conditional rendering, registered data, error handling.
-5. **report** — Adjudicates each finding with an Opus refutation panel; files GitHub issues for high-confidence bugs; writes `report.json` + `report.md` under `.loop-e2e/reports/<runId>/`.
+5. **scenarios** — Executes adopted scenarios' steps against the live app (see [Scenario execution](#scenario-execution-auth-preconditions) below). Skipped with `--skip-scenarios`.
+6. **report** — Adjudicates each finding with an Opus refutation panel; files GitHub issues for high-confidence bugs; writes `report.json` + `report.md` under `.loop-e2e/reports/<runId>/`.
 
 ```sh
 loop-e2e run --target staging
 loop-e2e run --skip-prepare     # Skip repo refresh and setup hooks
+loop-e2e run --skip-scenarios   # Skip executing adopted scenarios
 ```
+
+### Scenario execution (auth preconditions)
+
+After `verify`, `run` executes each adopted scenario's `steps` against the live app and
+records a pass/fail finding (`category: scenario`) that flows through the same report →
+Opus refutation gate → GitHub issue path. Findings from failed scenarios are high severity.
+
+A scenario declares whether it needs a login session via `precondition.auth`:
+
+```yaml
+precondition:
+  auth: authenticated     # or: unauthenticated
+```
+
+- **`authenticated`** — before running, `run` checks the session by visiting the scenario's
+  first `navigate` target; if the app redirects to the login path, it logs in (form + 2FA)
+  first, then runs the steps. The login happens **once** and the session is reused across
+  all `authenticated` scenarios in the run. If login fails, the remaining `authenticated`
+  scenarios are skipped with a single high finding.
+- **`unauthenticated`** — cookies are cleared (logged-out state) before the steps run.
+- **absent** — no auth handling (backward compatible with untagged scenarios).
+
+Supported step actions: `navigate`, `click`, `fill`, `submit`, `wait`, `assert`.
+`wait`/`assert` targets use `text=…` (text present), `url=…` (current URL contains), a bare
+integer (milliseconds, `wait` only), or a CSS selector (element exists). `fill` inputs may
+reference secrets as `{{ENV_NAME}}` (resolved from `.env`/process env) or `{{TWO_FACTOR_PIN}}`
+(resolved by running the target's `auth.twoFactor.pinCommand`). Resolved secret values are
+masked out of all findings and logs; a referenced placeholder that cannot be resolved fails
+the scenario.
+
+**Writing reliable scenarios:**
+
+- **Start each scenario with a `navigate` step.** The browser page is reused across scenarios,
+  so a scenario that begins with `click`/`assert` runs against whatever page the previous
+  scenario (or a failed login) left behind. A leading `navigate` makes each scenario
+  self-contained. (`grow`-generated scenarios already do this.)
+- **Pair `submit` with a following `assert`.** A `submit` step only clicks and waits for a
+  client-side navigation; it does **not** fail when the form is rejected and the page stays
+  put. To actually catch a broken submission, follow it with an `assert` (e.g.
+  `assert url=/dashboard` or `assert text=Saved`) that confirms the expected outcome.
+
+`grow`-generated scenarios are post-login pages — tag them `authenticated`; tag a login-flow
+scenario `unauthenticated`.
 
 ### Prepare phase
 

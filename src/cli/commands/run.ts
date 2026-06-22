@@ -8,10 +8,12 @@ import type { DbDriverOptions } from '../../services/db/index.js'
 import type { PageLike } from '../../services/browser/crawler.js'
 import type { LoginResult } from '../../services/browser/login.js'
 import type { prepare } from '../../pipeline/prepare.js'
+import type { ExecuteScenariosDeps } from '../../pipeline/executeScenarios.js'
 
 export type RunOpts = {
   target?: string
   skipPrepare?: boolean
+  skipScenarios?: boolean
 }
 
 type CollectFn = (ctx: RunContext, deps: object) => Promise<CollectResult>
@@ -68,6 +70,16 @@ export type RunDeps = {
   executeLogin?: ExecuteLoginFn
   /** Injectable page factory — production passes browser.newPage */
   createPage?: CreatePageFn
+  /** Injectable scenario execution stage — production passes executeScenarios from pipeline */
+  executeScenarios?: (
+    page: PageLike,
+    target: TargetEnv,
+    scenarios: Scenario[],
+    creds: { username: string; password: string },
+    deps?: ExecuteScenariosDeps,
+  ) => Promise<VerifyFinding[]>
+  /** Deps forwarded to executeScenarios (pinRunner, vars, secrets, authenticate, clearCookies, …) */
+  scenarioExecDeps?: ExecuteScenariosDeps
 }
 
 function makeEmptyStructure(): SiteStructure {
@@ -145,6 +157,63 @@ async function runLoginIfDetected(
       evidence: '',
     }
     return [finding]
+  } finally {
+    await page.close?.().catch(() => {})
+  }
+}
+
+/**
+ * Stage 3c: execute adopted scenarios' steps against the live app, applying each
+ * scenario's auth precondition. The detected login scenario is excluded (Stage 3b
+ * handles it). Returns VerifyFinding(category:'scenario')[]. Never throws — a failure
+ * here logs and yields no findings so the rest of the run still produces a report.
+ */
+async function runScenarioStage(
+  ctx: RunContext,
+  deps: RunDeps,
+  opts: RunOpts,
+  scenarios: Scenario[],
+): Promise<VerifyFinding[]> {
+  if (opts.skipScenarios || !deps.executeScenarios || !deps.createPage) return []
+
+  const configTarget = ctx.config.targets[0]
+  if (!configTarget?.auth) return []
+
+  const loginPath = configTarget.auth.loginPath ?? '/login'
+  const toRun = scenarios.filter((s) => !isLoginScenario(s, loginPath))
+  if (toRun.length === 0) return []
+
+  const creds = resolveCredentials(ctx.secrets, configTarget.auth)
+  if (!creds) {
+    logger.warn('Scenario stage: credentials not configured — skipping')
+    return []
+  }
+
+  const target: TargetEnv = {
+    name: configTarget.name,
+    baseUrl: configTarget.baseUrl,
+    auth: {
+      strategy: configTarget.auth.strategy,
+      loginPath: configTarget.auth.loginPath,
+      username: creds.username,
+      password: creds.password,
+      twoFactor: configTarget.auth.twoFactor,
+    },
+  }
+
+  let page: PageLike
+  try {
+    page = await deps.createPage()
+  } catch (err) {
+    logger.error({ err }, 'Scenario stage: failed to create page — skipping')
+    return []
+  }
+
+  try {
+    return await deps.executeScenarios(page, target, toRun, creds, deps.scenarioExecDeps)
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'Scenario execution stage failed — continuing')
+    return []
   } finally {
     await page.close?.().catch(() => {})
   }
@@ -298,6 +367,10 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
   // Stage 3b: login scenario execution (optional — only when a login scenario is detected)
   const loginFindings = await runLoginIfDetected(runCtx, deps, deps.scenarios ?? [])
   verifyFindings = [...verifyFindings, ...loginFindings]
+
+  // Stage 3c: scenario execution (optional — runs adopted scenarios with auth preconditions)
+  const scenarioFindings = await runScenarioStage(runCtx, deps, opts, deps.scenarios ?? [])
+  verifyFindings = [...verifyFindings, ...scenarioFindings]
 
   // Stage 4: report (always runs)
   // Use injected deps for adjudicate/upsertIssue/store; fall back to no-ops only in tests
