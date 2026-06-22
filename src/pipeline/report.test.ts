@@ -168,6 +168,64 @@ describe('writeReport', () => {
     expect(upsertIssueMock).not.toHaveBeenCalled()
   })
 
+  it('ユーザー確認要 section states the page for each uncertain finding (verify + diff)', async () => {
+    const verifyFinding: VerifyFinding = {
+      category: 'security',
+      severity: 'medium',
+      title: 'CSRF protection not detected',
+      detail: 'Page contains a <form> but no CSRF token was found.',
+      evidence: '[https://app.example.com/login] no csrf_token pattern',
+    }
+    const diffFinding = makeDiffFinding({ location: '/dashboard' })
+    const adjudicateMock = vi.fn().mockResolvedValue(makeVerdict({ classification: 'uncertain', confidence: 0.5 }))
+    const ctx = makeCtx(tmpRoot)
+
+    await writeReport(tmpRoot, ctx.runId, {
+      ctx,
+      diffFindings: [diffFinding],
+      verifyFindings: [verifyFinding],
+      llm: makeMockLlm(),
+      adjudicate: adjudicateMock,
+      upsertIssue: vi.fn().mockResolvedValue(undefined),
+      store: { saveBaseline: vi.fn().mockResolvedValue(undefined) },
+      githubClient: null,
+      repo: null,
+      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
+    })
+
+    const md = await readFile(join(tmpRoot, '.loop-e2e', 'reports', ctx.runId, 'report.md'), 'utf8')
+    expect(md).toContain('ユーザー確認要')
+    expect(md).toContain('**ページ:**')
+    // verify finding's page (extracted from evidence) and diff finding's location both appear
+    expect(md).toContain('https://app.example.com/login')
+    expect(md).toContain('/dashboard')
+  })
+
+  it('falls back to a relative screen path when no URL is present (input-validation)', async () => {
+    const finding: VerifyFinding = {
+      category: 'input-validation',
+      severity: 'high',
+      title: '入力チェック漏れ: /user/create age',
+      detail: '不正値「-1」が /user/create の age で拒否されませんでした。',
+      evidence: 'selector=[name="age"] expectation=reject confidence=high',
+    }
+    const ctx = makeCtx(tmpRoot)
+    await writeReport(tmpRoot, ctx.runId, {
+      ctx,
+      diffFindings: [],
+      verifyFindings: [finding],
+      llm: makeMockLlm(),
+      adjudicate: vi.fn().mockResolvedValue(makeVerdict({ classification: 'uncertain', confidence: 0.5 })),
+      upsertIssue: vi.fn().mockResolvedValue(undefined),
+      store: { saveBaseline: vi.fn().mockResolvedValue(undefined) },
+      githubClient: null,
+      repo: null,
+      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
+    })
+    const md = await readFile(join(tmpRoot, '.loop-e2e', 'reports', ctx.runId, 'report.md'), 'utf8')
+    expect(md).toMatch(/\*\*ページ:\*\* \/user\/create/)
+  })
+
   it('no findings: empty input → report still written, no upsertIssue', async () => {
     const adjudicateMock = vi.fn()
     const upsertIssueMock = vi.fn()

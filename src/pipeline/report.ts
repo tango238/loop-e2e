@@ -57,6 +57,35 @@ function findingTitle(finding: DiffFinding | VerifyFinding): string {
   return `[${finding.category}] ${finding.title}`
 }
 
+/**
+ * Best-effort page/URL for a finding so the user can tell which page it refers to.
+ * DiffFinding carries `location`; VerifyFinding embeds the page in `evidence`
+ * (`[url] …`, `… @ url`, `finalUrl: url`) or any URL across its fields.
+ */
+function findingPage(finding: DiffFinding | VerifyFinding): string {
+  if ('kind' in finding) return finding.location || '(ページ不明)'
+  const ev = finding.evidence ?? ''
+  // `[<url-or-path>]` — restricted to URL/path so it doesn't match selectors like [name="age"].
+  const bracket = /\[((?:https?:\/\/|\/)[^\]]+)\]/.exec(ev)
+  if (bracket) return bracket[1].trim()
+  const at = /@\s*(\S+)/.exec(ev)
+  if (at) return at[1]
+  const finalUrl = /finalUrl:\s*(\S+)/.exec(ev)
+  if (finalUrl) return finalUrl[1]
+  const haystack = `${ev} ${finding.detail} ${finding.title}`
+  const anyUrl = /(https?:\/\/\S+)/.exec(haystack)
+  if (anyUrl) return anyUrl[1]
+  // No full URL (e.g. input-validation findings reference a relative screen path like /user/create).
+  const path = /(?:^|\s)(\/[A-Za-z0-9/_.-]+)/.exec(haystack)
+  if (path) return path[1]
+  return '(ページ不明)'
+}
+
+/** One-line "what changed/was found" for the user-facing section. */
+function findingDetail(finding: DiffFinding | VerifyFinding): string {
+  return 'kind' in finding ? `${finding.expected} → ${finding.actual}` : finding.detail
+}
+
 function findingBody(finding: DiffFinding | VerifyFinding, verdict: FindingVerdict): string {
   if ('kind' in finding) {
     return `**Kind:** ${finding.kind}\n**Severity:** ${finding.severity}\n**Location:** ${finding.location}\n\n**Expected:** ${finding.expected}\n\n**Actual:** ${finding.actual}\n\n**Verdict:** ${verdict.classification} (confidence: ${verdict.confidence.toFixed(2)})\n\n${verdict.rationale}`
@@ -203,7 +232,8 @@ export async function writeReport(
       uncertainFindings
         .map(({ finding, verdict }) => {
           const title = findingTitle(finding)
-          return `### ${title}\n\n- **Verdict:** ${verdict.classification} (confidence: ${verdict.confidence.toFixed(2)})\n- **Rationale:** ${verdict.rationale}`
+          // Always state which page the finding refers to.
+          return `### ${title}\n\n- **ページ:** ${findingPage(finding)}\n- **Detail:** ${findingDetail(finding)}\n- **Verdict:** ${verdict.classification} (confidence: ${verdict.confidence.toFixed(2)})\n- **Rationale:** ${verdict.rationale}`
         })
         .join('\n\n')
     : ''
