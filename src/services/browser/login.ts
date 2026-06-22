@@ -15,7 +15,16 @@ export type LoginResult = {
 }
 
 /** Injectable dependencies for login (shell runner for the 2FA pinCommand). */
-export type LoginDeps = { pinRunner?: ComposeRunner; secrets?: string[] }
+export type LoginDeps = {
+  pinRunner?: ComposeRunner
+  secrets?: string[]
+  /** Max ms to wait for a client-side navigation away from the login path (default 8000). */
+  navTimeoutMs?: number
+  /** Injectable sleep for deterministic tests (default real setTimeout). */
+  sleep?: (ms: number) => Promise<void>
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 const pexec = promisify(execFile)
 const defaultPinRunner: ComposeRunner = (cmd, args, opts) =>
@@ -111,6 +120,11 @@ export async function executeLoginScenario(
     }
   }
 
+  // SPA logins POST asynchronously then navigate client-side — `waitForLoadState`
+  // can resolve before that route change. Wait for the URL to actually leave the
+  // login path (up to navTimeoutMs) before deciding success/failure.
+  await waitForUrlToLeave(page, loginPath, deps.navTimeoutMs ?? 8000, deps.sleep ?? defaultSleep)
+
   const afterSubmitUrl = page.url()
 
   if (urlMatchesPath(afterSubmitUrl, loginPath)) {
@@ -195,6 +209,24 @@ async function runTwoFactorStep(
 /** Heuristic: does this URL look like a 2-factor / OTP verification page? */
 function looksLikeTwoFactorPage(url: string): boolean {
   return /two-?factor|2fa|otp|mfa|verify/i.test(url)
+}
+
+/**
+ * Poll until the page URL no longer matches `loginPath`, or until `timeoutMs`
+ * elapses. Handles SPA client-side navigation that `waitForLoadState` misses.
+ */
+async function waitForUrlToLeave(
+  page: PageLike,
+  loginPath: string,
+  timeoutMs: number,
+  sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  const intervalMs = 250
+  const attempts = Math.max(0, Math.ceil(timeoutMs / intervalMs))
+  for (let i = 0; i < attempts; i++) {
+    if (!urlMatchesPath(page.url(), loginPath)) return
+    await sleep(intervalMs)
+  }
 }
 
 /**
