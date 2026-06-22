@@ -16,6 +16,7 @@ export type PageLike = {
   locator: (selector: string) => {
     fill: (value: string) => Promise<void>
     click: () => Promise<void>
+    count?: () => Promise<number>
   }
   /** Optional: close the page after capture to release resources */
   close?: () => Promise<void>
