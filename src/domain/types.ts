@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import type { TwoFactor } from '../config/schema.js'
+import type { TwoFactor, Grow } from '../config/schema.js'
 
-export type { TwoFactor }
+export type { TwoFactor, Grow }
 
 export type Secrets = {
   db: Record<string, string>
