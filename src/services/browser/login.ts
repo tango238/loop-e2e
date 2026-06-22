@@ -1,14 +1,25 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { logger } from '../../util/logger.js'
+import { maskSecrets } from '../../util/mask.js'
 import type { PageLike } from './crawler.js'
-import type { TargetEnv } from '../../domain/types.js'
+import type { TargetEnv, TwoFactor } from '../../domain/types.js'
 import type { Scenario } from '../../scenario/schema.js'
+import type { ComposeRunner } from '../compose/compose.js'
 
 export type LoginResult = {
   ok: boolean
-  /** Human-readable detail — must never contain credential values */
+  /** Human-readable detail — must never contain credential or PIN values */
   detail: string
   finalUrl: string
 }
+
+/** Injectable dependencies for login (shell runner for the 2FA pinCommand). */
+export type LoginDeps = { pinRunner?: ComposeRunner; secrets?: string[] }
+
+const pexec = promisify(execFile)
+const defaultPinRunner: ComposeRunner = (cmd, args, opts) =>
+  pexec(cmd, args, opts) as Promise<{ stdout: string; stderr: string }>
 
 // Default selector fallbacks when scenario steps don't provide specific selectors
 const DEFAULT_USERNAME_SELECTORS = [
@@ -39,6 +50,7 @@ export async function executeLoginScenario(
   target: TargetEnv,
   scenario: Scenario,
   creds: { username: string; password: string },
+  deps: LoginDeps = {},
 ): Promise<LoginResult> {
   const loginPath = target.auth?.loginPath ?? '/login'
   const loginUrl = `${target.baseUrl.replace(/\/$/, '')}${loginPath}`
@@ -99,24 +111,105 @@ export async function executeLoginScenario(
     }
   }
 
-  const finalUrl = page.url()
-  const stillOnLoginPage = urlMatchesPath(finalUrl, loginPath)
+  const afterSubmitUrl = page.url()
 
-  if (stillOnLoginPage) {
-    logger.info({ finalUrl }, 'Login appears to have failed — still on login page')
+  if (urlMatchesPath(afterSubmitUrl, loginPath)) {
+    logger.info({ finalUrl: afterSubmitUrl }, 'Login appears to have failed — still on login page')
     return {
       ok: false,
       detail: `login rejected: credentials not accepted (still on ${loginPath})`,
-      finalUrl,
+      finalUrl: afterSubmitUrl,
     }
   }
 
-  logger.info({ finalUrl }, 'Login succeeded')
+  // If 2FA is configured, the credential submit lands on the 2FA page; complete it.
+  const twoFactor = target.auth?.twoFactor
+  if (twoFactor) {
+    const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
+    return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets)
+  }
+
+  logger.info({ finalUrl: afterSubmitUrl }, 'Login succeeded')
   return {
     ok: true,
-    detail: `login succeeded: navigated to ${finalUrl}`,
-    finalUrl,
+    detail: `login succeeded: navigated to ${afterSubmitUrl}`,
+    finalUrl: afterSubmitUrl,
   }
+}
+
+/**
+ * Complete the 2FA step: fetch the PIN via the configured shell command,
+ * fill it, submit, and judge success. The PIN and credentials never appear
+ * in the returned detail or in logs (masked).
+ */
+async function runTwoFactorStep(
+  page: PageLike,
+  twoFactor: TwoFactor,
+  loginPath: string,
+  pinRunner: ComposeRunner,
+  secrets: string[],
+): Promise<LoginResult> {
+  let stdout = ''
+  try {
+    const result = await pinRunner('sh', ['-c', twoFactor.pinCommand])
+    stdout = result.stdout
+  } catch (err) {
+    return {
+      ok: false,
+      detail: `2FA failed: pin command error: ${maskSecrets(sanitizeError(err), secrets)}`,
+      finalUrl: page.url(),
+    }
+  }
+
+  const match = stdout.match(/\d{4,8}/)
+  if (!match) {
+    return { ok: false, detail: '2FA failed: pin not found in command output', finalUrl: page.url() }
+  }
+  const pin = match[0]
+  const maskWith = [...secrets, pin]
+
+  try {
+    await page.locator(twoFactor.pinFieldSelector).fill(pin)
+    await page.locator(twoFactor.submitSelector).click()
+    await page.waitForLoadState('networkidle')
+  } catch (err) {
+    return { ok: false, detail: `2FA failed: ${maskSecrets(sanitizeError(err), maskWith)}`, finalUrl: page.url() }
+  }
+
+  const finalUrl = page.url()
+  const ok = twoFactor.successUrlPattern
+    ? new RegExp(twoFactor.successUrlPattern).test(finalUrl)
+    : !urlMatchesPath(finalUrl, loginPath) && !finalUrl.toLowerCase().includes('two-factor')
+
+  if (!ok) {
+    return { ok: false, detail: `2FA failed: still not authenticated (at ${finalUrl})`, finalUrl }
+  }
+  logger.info({ finalUrl }, '2FA passed; login succeeded')
+  return { ok: true, detail: `login succeeded: 2FA passed, navigated to ${finalUrl}`, finalUrl }
+}
+
+/**
+ * Authenticate the given page against the target (form login + optional 2FA).
+ * On success the SAME page is left authenticated. Reuses executeLoginScenario
+ * with a minimal login scenario so default field selectors apply.
+ */
+export async function authenticate(
+  page: PageLike,
+  target: TargetEnv,
+  creds: { username: string; password: string },
+  deps: LoginDeps = {},
+): Promise<LoginResult> {
+  const minimalScenario: Scenario = {
+    id: 'authenticate',
+    title: 'authenticate',
+    businessFlow: 'Log in to obtain an authenticated session',
+    steps: [
+      { action: 'navigate', target: target.auth?.loginPath ?? '/login', expectedOutcome: 'login page shown' },
+    ],
+    expectedResults: [{ kind: 'ui', description: 'authenticated', assertion: 'navigated past login' }],
+    expectedDbState: [],
+  }
+  return executeLoginScenario(page, target, minimalScenario, creds, deps)
 }
 
 /**
