@@ -8,6 +8,7 @@ import { runScenario } from './commands/scenario.js'
 import { runRun } from './commands/run.js'
 import { runFeedback } from './commands/feedback.js'
 import { runGrow } from './commands/grow.js'
+import { runApprove } from './commands/approve.js'
 import { createLlm } from '../services/llm/client.js'
 import { loadConfig } from '../config/load.js'
 import { logger } from '../util/logger.js'
@@ -293,6 +294,31 @@ program
       if (browserCtx) {
         await browserCtx.browser.close().catch(() => {})
       }
+    }
+  })
+
+program
+  .command('approve')
+  .description('Promote proposed scenarios (from grow) to active')
+  .argument('[ids...]', 'Scenario ids to approve (omit with --all to approve every proposed scenario)')
+  .option('--all', 'Approve all proposed scenarios')
+  .action(async (ids: string[], opts: { all?: boolean }) => {
+    const cwd = process.cwd()
+    try {
+      const result = await runApprove(cwd, { all: opts.all, ids }, {})
+      if (result.approved.length === 0 && result.skipped.length === 0) {
+        process.stdout.write('approve: no proposed scenarios to approve (use --all or pass ids)\n')
+        return
+      }
+      if (result.approved.length > 0) {
+        process.stdout.write(`approved: ${result.approved.join(', ')}\n`)
+      }
+      for (const s of result.skipped) {
+        process.stdout.write(`skipped ${s.id}: ${s.reason}\n`)
+      }
+    } catch (err) {
+      process.stderr.write(`approve failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
     }
   })
 

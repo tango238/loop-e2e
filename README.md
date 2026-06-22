@@ -139,6 +139,44 @@ Options:
 | `--scenario <id>` | Scenario ID to update on valid feedback |
 | `--scenario-dir <dir>` | Scenario directory (default: `<cwd>/scenarios`) |
 
+### `grow`
+
+Grows your scenario suite by exploring the app **after login**: it authenticates
+(including 2FA), crawls in-app links to discover pages, finds pages no existing
+scenario covers, and asks the LLM (Opus) to propose scenarios for them. Proposals
+are saved as drafts under `<scenarioDir>/proposed/` and are **not** run until you
+approve them.
+
+```sh
+loop-e2e grow                 # discover + propose for the first target
+loop-e2e grow --target admin --max-pages 30
+loop-e2e grow --skip-prepare  # skip repo refresh + setup hooks
+```
+
+Flow: `prepare → authenticate (form login + 2FA) → discover (BFS) → find uncovered → propose → save drafts`.
+
+Options:
+
+| Flag | Description |
+|------|-------------|
+| `--target <name>` | Target to crawl (default: first target) |
+| `--max-pages <n>` | Cap on discovered pages (overrides `grow.maxPages`) |
+| `--skip-prepare` | Skip the pre-run prepare phase |
+
+`grow` requires `ANTHROPIC_API_KEY` (it uses the LLM to propose), and the target's
+`auth.twoFactor.pinCommand` if the app has 2FA (see [2FA config](#2fa-and-grow-config)).
+
+### `approve`
+
+Promotes proposed drafts (from `grow`) to active scenarios. Active scenarios are
+what `run` executes; proposals under `proposed/` are ignored by `run` until approved.
+Approval refuses to overwrite an existing active scenario of the same id (skipped with a reason).
+
+```sh
+loop-e2e approve --all            # adopt every proposed scenario
+loop-e2e approve grow-hotel-list  # adopt specific ids
+```
+
 ## Config file
 
 `.loop-e2e.yaml` in the project root:
@@ -202,6 +240,40 @@ refutation:
     - security
     - intentionality
 ```
+
+### 2FA and grow config
+
+To let `run`/`grow` complete a 2-factor login, add `auth.twoFactor` to the target.
+`pinCommand` is a shell command that prints the current PIN to stdout (loop-e2e
+extracts the first 4–8 digit run). It is **environment-specific** and lives in your
+config — e.g. reading the code from the app's DB or a dev mail catcher:
+
+```yaml
+targets:
+  - name: admin
+    baseUrl: https://localhost:3100
+    auth:
+      strategy: form
+      loginPath: /login
+      usernameEnv: ADMIN_USER
+      passwordEnv: ADMIN_PASS
+      twoFactor:
+        # Prints the latest 2FA PIN to stdout. Example: read it from the dev DB.
+        pinCommand: "docker exec myproject-app-1 php artisan tinker --execute=\"echo DB::table('two_factor_codes')->latest('id')->first()->pin_code;\""
+        pinFieldSelector: 'input[name="pin_code"]'   # default
+        submitSelector: 'button[type="submit"]'      # default
+        # successUrlPattern: '/dashboard'            # optional; default = moved off /login and /two-factor
+
+# Discovery crawl limits for `grow` (all optional; defaults shown)
+grow:
+  maxPages: 50
+  maxDepth: 3
+  excludePaths: ['/logout', '/api']
+```
+
+The PIN value and credentials are never written to logs, reports, or the
+`detail` of a login result. Proposed scenarios from `grow` are saved under
+`<scenarioDir>/proposed/` and adopted with `loop-e2e approve`.
 
 ## Environment variables (`.env`)
 
