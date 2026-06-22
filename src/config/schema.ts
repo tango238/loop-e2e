@@ -9,11 +9,19 @@ export const RepositorySchema = z.object({
   branch: z.string().optional(),
 })
 
+const TwoFactorSchema = z.object({
+  pinCommand: z.string().min(1),
+  pinFieldSelector: z.string().default('input[name="pin_code"]'),
+  submitSelector: z.string().default('button[type="submit"]'),
+  successUrlPattern: z.string().optional(),
+})
+
 export const AuthSchema = z.object({
   strategy: z.enum(['form', 'basic', 'none']),
   loginPath: z.string().optional(),
   usernameEnv: z.string().optional(),
   passwordEnv: z.string().optional(),
+  twoFactor: TwoFactorSchema.optional(),
 })
 
 export const TargetSchema = z.object({
@@ -68,6 +76,12 @@ const LaunchSchema = z.object({
 
 export type Launch = z.infer<typeof LaunchSchema>
 
+const GrowSchema = z.object({
+  maxPages: z.number().int().positive().default(50),
+  maxDepth: z.number().int().positive().default(3),
+  excludePaths: z.array(z.string()).default([]),
+})
+
 export const ConfigSchema = z.object({
   repositories: z.array(RepositorySchema).min(1),
   targets: z.array(TargetSchema).min(1),
@@ -81,8 +95,11 @@ export const ConfigSchema = z.object({
   refutation: RefutationSchema,
   launch: LaunchSchema.optional(),
   setup: z.array(z.object({ command: z.string().min(1) })).optional(),
+  grow: GrowSchema.optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>
 export type DbConfig = z.infer<typeof DbSchema>
+export type TwoFactor = z.infer<typeof TwoFactorSchema>
+export type Grow = z.infer<typeof GrowSchema>
 export const CONFIG_FILENAME = 'loop-e2e.config.yaml'
