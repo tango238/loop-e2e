@@ -180,6 +180,28 @@ program
     try {
       browserCtx = await launchBrowser()
       const launchedBrowser = browserCtx.browser
+
+      // Capture the latest auth-endpoint response (status + body) so login/2FA failures can be
+      // explained precisely (e.g. "HTTP 422: 登録情報と一致しませんでした") rather than guessed —
+      // the app shows such errors as auto-dismissing toasts the DOM scan misses.
+      let lastAuthResponse: { status: number; bodyText?: string } | null = null
+      const createPage = async () => {
+        const page = await launchedBrowser.newPage()
+        const raw = page as unknown as {
+          on?: (event: 'response', cb: (res: { url: () => string; status: () => number; text: () => Promise<string> }) => void) => void
+        }
+        raw.on?.('response', (res) => {
+          try {
+            if (!/\/auth\/(login|verify-two-factor|two-factor)/i.test(res.url())) return
+            const status = res.status()
+            res.text().then((t) => { lastAuthResponse = { status, bodyText: t } }).catch(() => { lastAuthResponse = { status } })
+          } catch {
+            /* ignore listener errors */
+          }
+        })
+        return page
+      }
+
       await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
         ctx: runContext,
         prepare,
@@ -202,7 +224,12 @@ program
         githubClient,
         repo,
         executeLogin: executeLoginScenario,
-        createPage: () => launchedBrowser.newPage(),
+        loginDeps: {
+          pinRunner: defaultComposeRunner,
+          secrets: allSecrets,
+          getAuthResponse: () => lastAuthResponse,
+        },
+        createPage,
         executeScenarios,
         scenarioExecDeps: {
           authenticate,

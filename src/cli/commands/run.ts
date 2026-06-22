@@ -32,6 +32,7 @@ type ExecuteLoginFn = (
   target: TargetEnv,
   scenario: Scenario,
   creds: { username: string; password: string },
+  deps?: import('../../services/browser/login.js').LoginDeps,
 ) => Promise<LoginResult>
 
 /** Injectable page factory — returns a PageLike from a browser */
@@ -68,6 +69,8 @@ export type RunDeps = {
   repo?: import('../../services/github/labels.js').RepoRef | null
   /** Injectable login executor — production passes executeLoginScenario */
   executeLogin?: ExecuteLoginFn
+  /** Deps forwarded to executeLogin (pinRunner, secrets, getAuthResponse, …) */
+  loginDeps?: import('../../services/browser/login.js').LoginDeps
   /** Injectable page factory — production passes browser.newPage */
   createPage?: CreatePageFn
   /** Injectable scenario execution stage — production passes executeScenarios from pipeline */
@@ -124,6 +127,9 @@ async function runLoginIfDetected(
     auth: {
       strategy: configTarget.auth.strategy,
       loginPath: configTarget.auth.loginPath,
+      // Forward 2FA config so the login stage can complete the PIN step (it previously
+      // omitted this, so `run`'s login never advanced past credentials into 2FA).
+      twoFactor: configTarget.auth.twoFactor,
     },
   }
 
@@ -136,7 +142,7 @@ async function runLoginIfDetected(
   }
 
   try {
-    const result = await deps.executeLogin(page, target, loginScenario, creds)
+    const result = await deps.executeLogin(page, target, loginScenario, creds, deps.loginDeps)
     logger.info({ ok: result.ok, finalUrl: result.finalUrl }, 'Login execution complete')
 
     const finding: VerifyFinding = {
