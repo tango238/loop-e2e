@@ -25,9 +25,28 @@ export type CreateLlmOptions = {
   client?: AnthropicClient
   /** Base backoff in ms between retries (0 in tests) */
   backoffMs?: number
+  /** Language for human-readable generated text (config.language). Defaults to Japanese. */
+  language?: string
 }
 
 const MAX_RETRIES = 3
+
+const LANGUAGE_NAMES: Record<string, string> = { ja: 'Japanese', en: 'English' }
+
+/**
+ * Instruction prepended to every prompt so AI-generated human-readable text (scenario titles,
+ * report prose, finding details, rationale) is produced in the configured language. Code,
+ * selectors, URLs, identifiers, and JSON keys are explicitly left untranslated.
+ */
+function languageDirective(language: string | undefined): string {
+  const lang = (language ?? 'ja').trim()
+  const name = LANGUAGE_NAMES[lang.toLowerCase()] ?? lang
+  return (
+    `Write all human-readable text you generate (titles, descriptions, business flows, summaries, ` +
+    `finding details, and rationale) in ${name}. Do not translate or alter code, CSS/DOM selectors, ` +
+    `URLs, file paths, identifiers, env-var names, or JSON keys — keep those exactly as written.`
+  )
+}
 
 /**
  * Creates an Llm instance that routes prompts to the correct model by role,
@@ -50,12 +69,14 @@ export function createLlm(
   const client: AnthropicClient =
     options.client ?? (new Anthropic({ apiKey }) as unknown as AnthropicClient)
 
+  const langNote = languageDirective(options.language)
+
   function modelForRole(role: LlmRole): string {
     return models[role]
   }
 
   async function callApi(model: string, systemNote: string, prompt: string): Promise<string> {
-    const fullPrompt = systemNote ? `${systemNote}\n\n${prompt}` : prompt
+    const fullPrompt = [langNote, systemNote, prompt].filter(Boolean).join('\n\n')
     const response = await client.messages.create({
       model,
       // Structured page-extraction outputs can be large; 4096 truncated big pages mid-JSON,

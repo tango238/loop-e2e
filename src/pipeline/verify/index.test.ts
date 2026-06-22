@@ -18,6 +18,7 @@ const minimalConfig: Config = {
   databases: [],
   schedule: { intervalMinutes: 60 },
   scenarioDir: 'scenarios',
+  language: 'ja',
   github: { labels: { ready: 'Ready', autoDetect: 'Auto-Detect' } },
   baseline: { commit: false },
   models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },

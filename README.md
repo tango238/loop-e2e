@@ -329,6 +329,12 @@ schedule:
 
 scenarioDir: scenarios
 
+# Language for AI-generated human-readable text — scenarios (grow/scenario),
+# the run report body, and GitHub-issue finding details/rationale.
+# Unset → Japanese. Set to "en" (or any language name) to change it.
+# Code, selectors, URLs, identifiers and JSON keys are never translated.
+language: ja
+
 github:
   owner: org
   repo: frontend

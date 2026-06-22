@@ -116,7 +116,7 @@ program
       process.exit(1)
     }
 
-    const llm = createLlm(secrets.anthropicApiKey, config.models)
+    const llm = createLlm(secrets.anthropicApiKey, config.models, { language: config.language })
 
     const { loadScenarios } = await import('../scenario/schema.js')
     const scenarioDir = config.scenarioDir.startsWith('/')
@@ -284,7 +284,7 @@ program
       scenarioId: opts.scenario,
       scenarioDir: opts.scenarioDir ?? `${cwd}/scenarios`,
     }, {
-      llm: createLlm(apiKey, models),
+      llm: createLlm(apiKey, models, { language: loaded?.config.language ?? 'ja' }),
     })
   })
 
@@ -308,7 +308,7 @@ program
       process.exit(1)
     }
 
-    const llm = createLlm(secrets.anthropicApiKey, config.models)
+    const llm = createLlm(secrets.anthropicApiKey, config.models, { language: config.language })
 
     const { launchBrowser } = await import('../services/browser/browser.js')
     const { authenticate } = await import('../services/browser/login.js')

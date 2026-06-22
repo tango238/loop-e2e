@@ -27,6 +27,15 @@ describe('ConfigSchema', () => {
   it('rejects intervalMinutes < 1', () => {
     expect(() => ConfigSchema.parse({ ...valid, schedule: { intervalMinutes: 0 } })).toThrow()
   })
+  it('leaves language unset by default (consumer defaults to Japanese)', () => {
+    expect(ConfigSchema.parse(valid).language).toBeUndefined()
+  })
+  it('accepts an explicit language', () => {
+    expect(ConfigSchema.parse({ ...valid, language: 'en' }).language).toBe('en')
+  })
+  it('rejects an empty language string', () => {
+    expect(() => ConfigSchema.parse({ ...valid, language: '' })).toThrow()
+  })
 })
 
 describe('LaunchSchema', () => {
