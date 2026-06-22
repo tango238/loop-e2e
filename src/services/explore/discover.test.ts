@@ -45,7 +45,7 @@ describe('parseFormFromHtml', () => {
 describe('discoverForms', () => {
   it('returns one DiscoveredForm per screen that has inputs, skipping empty ones', async () => {
     const page = fakePage({ '/user/create': formHtml, '/empty': '<div>nothing</div>' })
-    const forms = await discoverForms(page, target, ['/user/create', '/empty'], { sleep: async () => {} })
+    const forms = await discoverForms(page, target, ['/user/create', '/empty'])
     expect(forms).toHaveLength(1)
     expect(forms[0].screenPath).toBe('/user/create')
   })

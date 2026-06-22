@@ -51,6 +51,10 @@ describe('collectErrorsFromHtml', () => {
   it('returns [] when no error elements', () => {
     expect(collectErrorsFromHtml('<div class="ok">fine</div>')).toEqual([])
   })
+
+  it('does not match negation-ish classes like "errorless"', () => {
+    expect(collectErrorsFromHtml('<div class="errorless">all good</div>')).toEqual([])
+  })
 })
 
 describe('runCase', () => {

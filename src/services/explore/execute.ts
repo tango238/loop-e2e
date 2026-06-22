@@ -5,8 +5,11 @@ import type { DiscoveredForm, Baseline, InputCase, CaseOutcome } from './types.j
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 // Matches an opening tag whose class/id marks an error container, capturing its inner text.
+// The trailing (?![a-z]) excludes negation-ish tokens like "errorless"/"warningish".
+// Limitation: non-greedy inner capture truncates at the first same-tag close, so deeply
+// nested same-tag error containers under-report (mitigated by the DB-confirmation backstop).
 const ERROR_ELEMENT_REGEX =
-  /<([a-z0-9]+)[^>]*(?:class|id)=["'][^"']*(?:error|alert|warning|invalid|danger|fail)[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi
+  /<([a-z0-9]+)[^>]*(?:class|id)=["'][^"']*(?:error|alert|warning|invalid|danger|fail)(?![a-z])[^"']*["'][^>]*>([\s\S]*?)<\/\1>/gi
 
 /** Heuristically extract visible error-message text from page HTML. */
 export function collectErrorsFromHtml(html: string): string[] {

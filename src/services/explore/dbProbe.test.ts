@@ -24,4 +24,12 @@ describe('wasValueSaved', () => {
     const db: DbAdapter = { async query() { throw new Error('x') }, async close() {} }
     expect(await wasValueSaved(db, 'postgres', 't', 'c', 'v')).toBe(false)
   })
+
+  it('refuses to query when table/column is not a plain identifier', async () => {
+    let called = false
+    const db: DbAdapter = { async query() { called = true; return [{}] }, async close() {} }
+    expect(await wasValueSaved(db, 'postgres', 'users; DROP TABLE users; --', 'c', 'v')).toBe(false)
+    expect(await wasValueSaved(db, 'postgres', 'users', 'col = 1 OR 1=1', 'v')).toBe(false)
+    expect(called).toBe(false)
+  })
 })

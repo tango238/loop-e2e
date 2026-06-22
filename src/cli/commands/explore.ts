@@ -83,6 +83,26 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
   const browserCtx = await deps.launchBrowser()
   try {
     const ctx = { root: cwd, runId: '', config, secrets }
+
+    // Track the most recent mutating-request response status, used by the gap oracle's
+    // "2xx accepted" signal. Attached per page; explore drives a single page.
+    let lastStatus: number | undefined
+    const createPage = async () => {
+      const page = await browserCtx.browser.newPage()
+      const raw = page as unknown as {
+        on?: (event: 'response', cb: (res: { status: () => number; request: () => { method: () => string } }) => void) => void
+      }
+      raw.on?.('response', (res) => {
+        try {
+          const method = res.request().method().toUpperCase()
+          if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) lastStatus = res.status()
+        } catch {
+          /* ignore listener errors */
+        }
+      })
+      return page
+    }
+
     const result = await deps.explore(cwd, opts, {
       target,
       creds,
@@ -90,7 +110,11 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
       seed: config.launch?.seed,
       config,
       secrets: allSecrets,
-      createPage: () => browserCtx.browser.newPage(),
+      // Real execution deps: mask page error text against ALL secrets, and feed the
+      // mutating-response status into the oracle. (Without this, runCase would mask against
+      // [] and the 2xx gap signal would be dead — see review #1.)
+      execDeps: { secrets: allSecrets, getLastStatus: () => lastStatus },
+      createPage,
       authenticate: (page, t, c) => authenticate(page, t, c, { pinRunner: defaultComposeRunner, secrets: allSecrets }),
       discoverForms: (page, t, screens) => discoverForms(page, t, screens),
       inferCandidateTables,
@@ -104,6 +128,9 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
       wasValueSaved,
       db,
       llm,
+      // sourceRules (spec §4.2 — Laravel FormRequest / Zod / class-validator extraction) is a
+      // deferred follow-up; constraint modeling currently uses DB columns + HTML only. The
+      // `sourceRules` hook on ExploreDeps is left injectable for when ingestion is wired.
       writeReport,
       reportDeps: {
         ctx,

@@ -3,8 +3,6 @@ import type { PageLike } from '../browser/crawler.js'
 import type { TargetEnv } from '../../domain/types.js'
 import type { DiscoveredForm, FormField } from './types.js'
 
-const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
 function attr(tag: string, name: string): string | undefined {
   const m = new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(tag)
   return m ? m[1] : undefined
@@ -50,14 +48,16 @@ export function parseFormFromHtml(html: string, screenPath: string): DiscoveredF
   return { screenPath, submitSelector, fields }
 }
 
-/** Navigate to each screen path and extract its form. Screens without inputs are skipped. */
+/**
+ * Navigate to each screen path and extract its form. Screens without inputs are skipped.
+ * NOTE: parsing is regex-over-HTML on the post-`networkidle` `page.content()`; fields in shadow
+ * DOM / web components are not seen. A DOM-based extractor (cf. extractPageInfo) would be more robust.
+ */
 export async function discoverForms(
   page: PageLike,
   target: TargetEnv,
   screenPaths: string[],
-  deps: { sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<DiscoveredForm[]> {
-  void (deps.sleep ?? defaultSleep)
   const base = target.baseUrl.replace(/\/$/, '')
   const forms: DiscoveredForm[] = []
   for (const path of screenPaths) {

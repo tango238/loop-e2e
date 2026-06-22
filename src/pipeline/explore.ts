@@ -94,6 +94,11 @@ export async function explore(root: string, opts: ExploreOpts, deps: ExploreDeps
   if (!deps.seed && !opts.noReseed) {
     throw new Error('explore: launch.seed is not configured and --no-reseed was not passed; aborting to avoid leaving the DB dirty')
   }
+  // The escape hatch (--no-reseed with no seed) drives invalid/boundary writes into a DB it
+  // cannot restore. Allowed, but warn loudly — this is the one path with no restore safety net.
+  if (!deps.seed && opts.noReseed) {
+    logger.warn({ root }, 'explore: running with --no-reseed and NO seed configured — DB changes will NOT be restored')
+  }
 
   const secrets = deps.secrets ?? []
   const runId = deps.runId ?? new Date().toISOString().replace(/[:.]/g, '-')

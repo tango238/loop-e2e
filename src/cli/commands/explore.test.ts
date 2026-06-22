@@ -14,8 +14,12 @@ describe('runExplore', () => {
   }
   const secrets = { db: { DBPASS: 'pw' }, targetAuth: { U: 'user', P: 'pass' }, anthropicApiKey: 'k', githubToken: '' }
 
-  it('resolves config and invokes explore with wired deps', async () => {
-    const exploreFn = vi.fn(async () => ({ findings: [], forms: 2, cases: 9, gapsHigh: 1, gapsMedium: 0, messageIssues: 1 }))
+  it('resolves config and invokes explore with wired deps (incl. execDeps secret masking)', async () => {
+    let capturedDeps: Record<string, unknown> | undefined
+    const exploreFn = vi.fn(async (_root: string, _opts: unknown, d: Record<string, unknown>) => {
+      capturedDeps = d
+      return { findings: [], forms: 2, cases: 9, gapsHigh: 1, gapsMedium: 0, messageIssues: 1 }
+    })
     const res = await runExplore('/cwd', { screens: ['/user/create'] }, {
       loadConfig: async () => ({ config, secrets }) as never,
       explore: exploreFn as never,
@@ -26,6 +30,11 @@ describe('runExplore', () => {
     } as never)
     expect(exploreFn).toHaveBeenCalledOnce()
     expect(res.gapsHigh).toBe(1)
+    // execDeps must carry the masked secret set + a status getter, else runCase masks against [].
+    const execDeps = capturedDeps?.execDeps as { secrets?: string[]; getLastStatus?: () => unknown } | undefined
+    expect(execDeps?.secrets).toContain('pw')   // db password
+    expect(execDeps?.secrets).toContain('pass') // target auth password
+    expect(typeof execDeps?.getLastStatus).toBe('function')
   })
 
   it('throws when the named target is missing', async () => {

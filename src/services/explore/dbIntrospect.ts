@@ -18,19 +18,28 @@ function toNumber(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
+/** Only plain identifiers are accepted as table names (guards against LLM-hallucinated input). */
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
 /**
- * Read column definitions for `table` from information_schema.columns.
- * Postgres uses `$1`; MySQL uses `?`. Never throws — returns [] on error.
+ * Read column definitions for `table` from information_schema.columns, scoped to the
+ * current schema/database so a same-named table in another schema can't bleed in.
+ * Postgres uses `$1`; MySQL uses `?`. Never throws — returns [] on error or bad table name.
  */
 export async function introspectTable(
   db: DbAdapter,
   dbType: 'postgres' | 'mysql',
   table: string,
 ): Promise<ColumnDef[]> {
+  if (!IDENT.test(table)) {
+    logger.warn({ table }, 'introspectTable: non-identifier table name — skipping')
+    return []
+  }
   const placeholder = dbType === 'postgres' ? '$1' : '?'
+  const schemaScope = dbType === 'postgres' ? `AND table_schema = current_schema()` : `AND table_schema = DATABASE()`
   const sql =
     `SELECT column_name, data_type, is_nullable, character_maximum_length, numeric_precision ` +
-    `FROM information_schema.columns WHERE table_name = ${placeholder}`
+    `FROM information_schema.columns WHERE table_name = ${placeholder} ${schemaScope}`
   try {
     const rows = await db.query(sql, [table])
     return rows.map((row) => {

@@ -45,4 +45,20 @@ describe('introspectTable', () => {
     }
     expect(await introspectTable(db, 'postgres', 'x')).toEqual([])
   })
+
+  it('scopes the query to the current schema', async () => {
+    const db = fakeDb([])
+    await introspectTable(db, 'postgres', 'users')
+    expect(String(db.calls[0][0])).toContain('current_schema()')
+    const db2 = fakeDb([])
+    await introspectTable(db2, 'mysql', 'users')
+    expect(String(db2.calls[0][0])).toContain('DATABASE()')
+  })
+
+  it('refuses a non-identifier table name', async () => {
+    let called = false
+    const db: DbAdapter = { async query() { called = true; return [] }, async close() {} }
+    expect(await introspectTable(db, 'postgres', 'users; DROP TABLE users')).toEqual([])
+    expect(called).toBe(false)
+  })
 })
