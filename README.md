@@ -261,6 +261,37 @@ Behaviour:
 | `--into <path>` | rdra-analyzer `analysis_result.json` (default: `<cwd>/output/usecases/analysis_result.json`) |
 | `--scenario-dir <dir>` | Scenario directory (default: `<cwd>/<config.scenarioDir>`) |
 
+### `explore` — 探索的入力検証
+
+各画面のフォームに、わざと不正/境界の値を入力して何が起きるかを探索的に検証し、
+(1) **バリデーションギャップ**（不正値が拒否されず DB に保存される）と
+(2) **エラーメッセージ品質**（1つにまとめられて分かりにくい等）を検出します。
+
+```bash
+loop-e2e explore --screen /user/create --screen /coupon/create
+loop-e2e explore --target spotly --screen /hotel/create
+loop-e2e explore --screen /user/create --no-reseed   # 再シードしない（dev ガードを外す）
+```
+
+Behaviour:
+- 制約（必須/型/長さ/最小最大/形式）は **DB テーブル定義 ＋ ソースのバリデーションルール** から
+  Opus が割り出します（フロント/DB/API の命名ズレを吸収）。
+- ケースは **ルールベース骨格（決定的）＋ LLM の創造的エッジケース**で生成します。
+- gap 判定は **UI/ネットワーク信号で疑い検出 → DB 照会で裏取り**：保存を確認できれば `high`、
+  DB 照会不可なら `medium`。エラーメッセージ品質は Opus が評価します。
+- 結果は `category: 'input-validation'` の finding として、既存のレポート
+  （`report.md`/`report.json`）＋反証ゲート経由で GitHub Issue 化されます。
+  クロールのベースラインは上書きしません。
+- **安全性**: dev/local 前提。実行後に `launch.seed` で DB を初期化します。`launch.seed` が
+  未設定かつ `--no-reseed` でもない場合は、破壊防止のため**中断**します。認証失敗時もフォーム送信前に中断します。
+
+| Flag | Description |
+|------|-------------|
+| `--target <name>` | Target name to run against (default: first target) |
+| `--screen <path...>` | Screen path(s) to explore (repeatable) |
+| `--skip-prepare` | Skip the pre-run prepare phase (repo refresh + setup hooks) |
+| `--no-reseed` | Do not re-seed after the run (skips the dev-guard) |
+
 ## Config file
 
 `.loop-e2e.yaml` in the project root:
