@@ -103,6 +103,29 @@ describe('executeLoginScenario', () => {
     expect(result.finalUrl).toContain('/login')
   })
 
+  it('distinguishes a shown error from a silent non-advance (CORS/network)', async () => {
+    // Error shown → "error shown" wording with the (masked) message
+    const errPage = makeFakePage({
+      currentUrl: 'http://localhost:3000/login',
+      pageContent: '<html><body><p class="error">メールアドレスまたはパスワードが違います</p></body></html>',
+    })
+    ;(errPage.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({ fill: vi.fn(async () => {}), click: vi.fn(async () => {}) }))
+    const errResult = await executeLoginScenario(errPage, baseTarget, loginScenario, creds, { navTimeoutMs: 0 })
+    expect(errResult.ok).toBe(false)
+    expect(errResult.detail).toContain('error shown')
+    expect(errResult.detail).toContain('違います')
+
+    // No error element → points at request not completing (CORS/network/backend)
+    const silentPage = makeFakePage({
+      currentUrl: 'http://localhost:3000/login',
+      pageContent: '<html><body><form></form></body></html>',
+    })
+    ;(silentPage.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({ fill: vi.fn(async () => {}), click: vi.fn(async () => {}) }))
+    const silentResult = await executeLoginScenario(silentPage, baseTarget, loginScenario, creds, { navTimeoutMs: 0 })
+    expect(silentResult.ok).toBe(false)
+    expect(silentResult.detail).toMatch(/did not complete|CORS|network/i)
+  })
+
   it('returns ok:false with detail when a field cannot be found', async () => {
     const page = makeFakePage({ fillShouldFail: true })
 

@@ -58,7 +58,9 @@ export function createLlm(
     const fullPrompt = systemNote ? `${systemNote}\n\n${prompt}` : prompt
     const response = await client.messages.create({
       model,
-      max_tokens: 4096,
+      // Structured page-extraction outputs can be large; 4096 truncated big pages mid-JSON,
+      // which failed JSON.parse on every retry. 8192 gives headroom without much cost.
+      max_tokens: 8192,
       messages: [{ role: 'user', content: fullPrompt }],
     })
     const textBlock = response.content.find((b) => b.type === 'text')
@@ -85,7 +87,7 @@ export function createLlm(
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const text = await callApi(model, systemNote, prompt)
-        const parsed = JSON.parse(text) as unknown
+        const parsed = JSON.parse(extractJson(text)) as unknown
         return schema.parse(parsed)
       } catch (err) {
         lastError = err
@@ -106,4 +108,32 @@ export function createLlm(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Extract a JSON document from a model response that may, despite instructions, wrap it in
+ * markdown code fences or surround it with prose. Strips ```json/``` fences, else slices from
+ * the first opening bracket to the last matching closing bracket. Returns the input trimmed
+ * when no JSON-looking region is found (so the caller's JSON.parse throws a clear error).
+ */
+export function extractJson(text: string): string {
+  const trimmed = text.trim()
+
+  // 1) Fenced block: ```json\n...\n``` or ```\n...\n```
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed)
+  if (fence && fence[1].trim()) return fence[1].trim()
+
+  // 2) First balanced object/array region: from the first { or [ to the last } or ].
+  const firstObj = trimmed.indexOf('{')
+  const firstArr = trimmed.indexOf('[')
+  const candidates = [firstObj, firstArr].filter((i) => i >= 0)
+  if (candidates.length > 0) {
+    const start = Math.min(...candidates)
+    const open = trimmed[start]
+    const close = open === '{' ? '}' : ']'
+    const end = trimmed.lastIndexOf(close)
+    if (end > start) return trimmed.slice(start, end + 1)
+  }
+
+  return trimmed
 }
