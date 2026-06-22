@@ -140,3 +140,31 @@ describe('saveScenario', () => {
     expect(result).toHaveLength(1)
   })
 })
+
+describe('ScenarioSchema.precondition', () => {
+  const base = {
+    id: 'grow-x',
+    title: 'X',
+    businessFlow: 'flow',
+    steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'ok' }],
+    expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }],
+    expectedDbState: [],
+  }
+
+  it('accepts a scenario without precondition (backward compatible)', () => {
+    expect(ScenarioSchema.parse(base).precondition).toBeUndefined()
+  })
+
+  it('accepts authenticated / unauthenticated', () => {
+    expect(ScenarioSchema.parse({ ...base, precondition: { auth: 'authenticated' } }).precondition?.auth).toBe(
+      'authenticated',
+    )
+    expect(ScenarioSchema.parse({ ...base, precondition: { auth: 'unauthenticated' } }).precondition?.auth).toBe(
+      'unauthenticated',
+    )
+  })
+
+  it('rejects an invalid auth value', () => {
+    expect(ScenarioSchema.safeParse({ ...base, precondition: { auth: 'maybe' } }).success).toBe(false)
+  })
+})
