@@ -15,7 +15,7 @@ export function mergeIntoAnalysisResult(
   const scenarios = [...existingNonLe, ...leScenarios]
   const merged: AnalysisResult = {
     ...analysis,
-    usecases: analysis.usecases,
+    usecases: [...analysis.usecases],
     scenarios,
     metadata: {
       ...(analysis.metadata ?? {}),

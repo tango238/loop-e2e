@@ -8,11 +8,16 @@ const METHOD_RE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY)\s+/i
 
 /** Strip origin/query/fragment and trailing slash (root "/" kept). Handles full URL or path. */
 export function normalizePath(url: string): string {
-  let path = url
-  try {
-    path = new URL(url).pathname
-  } catch {
+  let path: string
+  if (url.startsWith('/')) {
+    // Already a path — strip query/fragment directly (avoids new URL mis-parsing "foo:bar").
     path = url.split('#')[0].split('?')[0]
+  } else {
+    try {
+      path = new URL(url).pathname
+    } catch {
+      path = url.split('#')[0].split('?')[0]
+    }
   }
   if (path.length > 1) path = path.replace(/\/+$/, '')
   return path === '' ? '/' : path

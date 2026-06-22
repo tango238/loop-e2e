@@ -39,7 +39,12 @@ export function apiEndpoints(scenario: Scenario): ApiEndpoint[] {
     })
 }
 
-/** Reduce endpoints to the single string rdra reads: "<METHOD> <path>" / path / raw / "". */
+/**
+ * Reduce endpoints to the single string rdra reads: "<METHOD> <path>" / path / raw / "".
+ * Only the FIRST endpoint is used (rdra's api_endpoint is a scalar) — for a matched
+ * scenario, 2nd+ endpoints are intentionally not represented here. (They survive in full
+ * in loop-e2e-pending.json for unmatched scenarios.)
+ */
 export function apiEndpointString(eps: ApiEndpoint[]): string {
   const first = eps[0]
   if (!first) return ''
