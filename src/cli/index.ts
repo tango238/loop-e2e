@@ -7,6 +7,8 @@ import { runDown } from './commands/down.js'
 import { runScenario } from './commands/scenario.js'
 import { runRun } from './commands/run.js'
 import { runFeedback } from './commands/feedback.js'
+import { runGrow } from './commands/grow.js'
+import { runApprove } from './commands/approve.js'
 import { createLlm } from '../services/llm/client.js'
 import { loadConfig } from '../config/load.js'
 import { logger } from '../util/logger.js'
@@ -228,6 +230,96 @@ program
     }, {
       llm: createLlm(apiKey, models),
     })
+  })
+
+program
+  .command('grow')
+  .description('Discover post-login pages and propose new scenarios (proposed drafts)')
+  .option('--target <name>', 'Target name to run against')
+  .option('--max-pages <n>', 'Max pages to discover', (v) => parseInt(v, 10))
+  .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
+  .action(async (opts: { target?: string; maxPages?: number; skipPrepare?: boolean }) => {
+    const cwd = process.cwd()
+
+    let config: import('../config/schema.js').Config
+    let secrets: import('../domain/types.js').Secrets
+    try {
+      const loaded = await loadConfig(cwd)
+      config = loaded.config
+      secrets = loaded.secrets
+    } catch (err) {
+      process.stderr.write(`Error loading config: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+
+    const llm = createLlm(secrets.anthropicApiKey, config.models)
+
+    const { launchBrowser } = await import('../services/browser/browser.js')
+    const { authenticate } = await import('../services/browser/login.js')
+    const { discoverPages } = await import('../services/browser/discover.js')
+    const { findUncoveredPages } = await import('../services/grow/coverage.js')
+    const { proposeScenarios } = await import('../services/llm/proposeScenarios.js')
+    const { loadScenarios, saveProposedScenario } = await import('../scenario/schema.js')
+    const { prepare } = await import('../pipeline/prepare.js')
+
+    let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
+    try {
+      browserCtx = await launchBrowser()
+      const browser = browserCtx.browser
+      const result = await runGrow(
+        cwd,
+        { target: opts.target, maxPages: opts.maxPages, skipPrepare: opts.skipPrepare },
+        {
+          prepare,
+          createPage: () => browser.newPage(),
+          authenticate,
+          discoverPages,
+          findUncoveredPages,
+          proposeScenarios,
+          loadScenarios,
+          saveProposedScenario,
+          llm,
+          pinRunner: defaultComposeRunner,
+        },
+      )
+      process.stdout.write(
+        `grow: discovered ${result.discovered} pages, ${result.uncovered} uncovered; ` +
+          `proposed ${result.proposed.length} scenarios → ${config.scenarioDir}/proposed/\n` +
+          `Review with 'loop-e2e approve --all' (or per id) to adopt them.\n`,
+      )
+    } catch (err) {
+      process.stderr.write(`grow failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    } finally {
+      if (browserCtx) {
+        await browserCtx.browser.close().catch(() => {})
+      }
+    }
+  })
+
+program
+  .command('approve')
+  .description('Promote proposed scenarios (from grow) to active')
+  .argument('[ids...]', 'Scenario ids to approve (omit with --all to approve every proposed scenario)')
+  .option('--all', 'Approve all proposed scenarios')
+  .action(async (ids: string[], opts: { all?: boolean }) => {
+    const cwd = process.cwd()
+    try {
+      const result = await runApprove(cwd, { all: opts.all, ids }, {})
+      if (result.approved.length === 0 && result.skipped.length === 0) {
+        process.stdout.write('approve: no proposed scenarios to approve (use --all or pass ids)\n')
+        return
+      }
+      if (result.approved.length > 0) {
+        process.stdout.write(`approved: ${result.approved.join(', ')}\n`)
+      }
+      for (const s of result.skipped) {
+        process.stdout.write(`skipped ${s.id}: ${s.reason}\n`)
+      }
+    } catch (err) {
+      process.stderr.write(`approve failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
   })
 
 program.parse()

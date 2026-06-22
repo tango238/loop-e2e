@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { join } from 'node:path'
-import { readdir } from 'node:fs/promises'
+import { readdir, rename, access } from 'node:fs/promises'
 import { ensureDir, readYaml, writeYaml } from '../util/fs.js'
 
 // --- Step schema ---
@@ -45,6 +45,14 @@ export type Scenario = z.infer<typeof ScenarioSchema>
 
 const SCENARIO_FILE_SUFFIX = '.scenario.yaml'
 
+/** Scenario ids become filenames — reject anything that isn't a safe slug (no path separators). */
+const VALID_ID = /^[A-Za-z0-9_-]+$/
+function assertValidId(id: string): void {
+  if (!VALID_ID.test(id)) {
+    throw new Error(`invalid scenario id (must match [A-Za-z0-9_-]+): ${JSON.stringify(id)}`)
+  }
+}
+
 /**
  * Load all *.scenario.yaml files from `dir`, parse, and zod-validate each.
  * Invalid files are logged and skipped rather than throwing.
@@ -74,7 +82,59 @@ export async function loadScenarios(dir: string): Promise<Scenario[]> {
  * Ensures the directory exists before writing.
  */
 export async function saveScenario(dir: string, scenario: Scenario): Promise<void> {
+  assertValidId(scenario.id)
   await ensureDir(dir)
   const path = join(dir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`)
   await writeYaml(path, scenario)
+}
+
+/** Subdirectory under the scenario dir where proposed (unapproved) scenarios live. */
+export const PROPOSED_SUBDIR = 'proposed'
+
+/**
+ * Save a proposed (not-yet-approved) scenario to `<dir>/proposed/<id>.scenario.yaml`.
+ * `loadScenarios(dir)` does NOT load these — they are excluded from `run` until approved.
+ */
+export async function saveProposedScenario(dir: string, scenario: Scenario): Promise<void> {
+  assertValidId(scenario.id)
+  const proposedDir = join(dir, PROPOSED_SUBDIR)
+  await ensureDir(proposedDir)
+  await writeYaml(join(proposedDir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`), scenario)
+}
+
+/** Load all proposed scenarios from `<dir>/proposed/`. */
+export async function loadProposedScenarios(dir: string): Promise<Scenario[]> {
+  return loadScenarios(join(dir, PROPOSED_SUBDIR))
+}
+
+/**
+ * Promote a proposed scenario to active: move `<dir>/proposed/<id>.scenario.yaml`
+ * to `<dir>/<id>.scenario.yaml`. Refuses to overwrite an existing active scenario
+ * with the same id (throws); the proposed file is left in place in that case.
+ */
+export async function approveScenario(dir: string, id: string): Promise<void> {
+  assertValidId(id)
+  const filename = `${id}${SCENARIO_FILE_SUFFIX}`
+  const proposedPath = join(dir, PROPOSED_SUBDIR, filename)
+  const activePath = join(dir, filename)
+
+  try {
+    await access(proposedPath)
+  } catch {
+    throw new Error(`proposed scenario not found: ${id}`)
+  }
+
+  let activeExists = false
+  try {
+    await access(activePath)
+    activeExists = true
+  } catch {
+    activeExists = false
+  }
+  if (activeExists) {
+    throw new Error(`active scenario already exists: ${id} (will not overwrite)`)
+  }
+
+  await ensureDir(dir)
+  await rename(proposedPath, activePath)
 }
