@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { join } from 'node:path'
-import { readdir } from 'node:fs/promises'
+import { readdir, rename, access } from 'node:fs/promises'
 import { ensureDir, readYaml, writeYaml } from '../util/fs.js'
 
 // --- Step schema ---
@@ -77,4 +77,53 @@ export async function saveScenario(dir: string, scenario: Scenario): Promise<voi
   await ensureDir(dir)
   const path = join(dir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`)
   await writeYaml(path, scenario)
+}
+
+/** Subdirectory under the scenario dir where proposed (unapproved) scenarios live. */
+export const PROPOSED_SUBDIR = 'proposed'
+
+/**
+ * Save a proposed (not-yet-approved) scenario to `<dir>/proposed/<id>.scenario.yaml`.
+ * `loadScenarios(dir)` does NOT load these — they are excluded from `run` until approved.
+ */
+export async function saveProposedScenario(dir: string, scenario: Scenario): Promise<void> {
+  const proposedDir = join(dir, PROPOSED_SUBDIR)
+  await ensureDir(proposedDir)
+  await writeYaml(join(proposedDir, `${scenario.id}${SCENARIO_FILE_SUFFIX}`), scenario)
+}
+
+/** Load all proposed scenarios from `<dir>/proposed/`. */
+export async function loadProposedScenarios(dir: string): Promise<Scenario[]> {
+  return loadScenarios(join(dir, PROPOSED_SUBDIR))
+}
+
+/**
+ * Promote a proposed scenario to active: move `<dir>/proposed/<id>.scenario.yaml`
+ * to `<dir>/<id>.scenario.yaml`. Refuses to overwrite an existing active scenario
+ * with the same id (throws); the proposed file is left in place in that case.
+ */
+export async function approveScenario(dir: string, id: string): Promise<void> {
+  const filename = `${id}${SCENARIO_FILE_SUFFIX}`
+  const proposedPath = join(dir, PROPOSED_SUBDIR, filename)
+  const activePath = join(dir, filename)
+
+  try {
+    await access(proposedPath)
+  } catch {
+    throw new Error(`proposed scenario not found: ${id}`)
+  }
+
+  let activeExists = false
+  try {
+    await access(activePath)
+    activeExists = true
+  } catch {
+    activeExists = false
+  }
+  if (activeExists) {
+    throw new Error(`active scenario already exists: ${id} (will not overwrite)`)
+  }
+
+  await ensureDir(dir)
+  await rename(proposedPath, activePath)
 }
