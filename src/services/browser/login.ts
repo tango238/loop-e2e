@@ -3,8 +3,8 @@ import { promisify } from 'node:util'
 import { logger } from '../../util/logger.js'
 import { maskSecrets } from '../../util/mask.js'
 import type { PageLike } from './crawler.js'
-import type { TargetEnv, TwoFactor } from '../../domain/types.js'
-import type { Scenario } from '../../scenario/schema.js'
+import type { TargetEnv } from '../../domain/types.js'
+import type { Scenario, ScenarioTwoFactor, LoadedScenario } from '../../scenario/schema.js'
 import type { ComposeRunner } from '../compose/compose.js'
 
 export type LoginResult = {
@@ -29,6 +29,14 @@ export type LoginDeps = {
    * error only as an auto-dismissing toast that is gone by the time the DOM is scanned.
    */
   getAuthResponse?: () => { status: number; bodyText?: string } | null
+  /**
+   * 2FA config for the login scenario (env-specific; owned by the scenario). Used when the
+   * executing scenario itself has no `twoFactor` — e.g. the synthetic scenario built by
+   * `authenticate` for grow/explore/authenticated-precondition flows.
+   */
+  twoFactor?: ScenarioTwoFactor
+  /** Script directory for resolving the 2FA pinCommand (cwd). Login scenario's `scriptDir`. */
+  scriptDir?: string
 }
 
 /** One-line description of the captured auth response, masked, or null if none captured. */
@@ -167,11 +175,13 @@ export async function executeLoginScenario(
   // If 2FA is configured AND the credential submit landed on a 2FA page, complete it.
   // If 2FA is configured but the app went straight to the dashboard (2FA remembered
   // for this device, or the user has no 2FA), do NOT run the PIN step — the login
-  // already succeeded.
-  const twoFactor = target.auth?.twoFactor
+  // already succeeded. 2FA config is owned by the scenario (env-specific); fall back to
+  // deps.twoFactor for the synthetic scenario built by authenticate().
+  const twoFactor = scenario.twoFactor ?? deps.twoFactor
+  const scriptDir = (scenario as LoadedScenario).scriptDir ?? deps.scriptDir
   if (twoFactor && looksLikeTwoFactorPage(afterSubmitUrl)) {
     const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
-    return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets, navTimeoutMs, sleep, deps.getAuthResponse)
+    return runTwoFactorStep(page, twoFactor, scriptDir, loginPath, deps.pinRunner ?? defaultPinRunner, secrets, navTimeoutMs, sleep, deps.getAuthResponse)
   }
 
   logger.info({ finalUrl: afterSubmitUrl }, 'Login succeeded')
@@ -189,7 +199,8 @@ export async function executeLoginScenario(
  */
 async function runTwoFactorStep(
   page: PageLike,
-  twoFactor: TwoFactor,
+  twoFactor: ScenarioTwoFactor,
+  scriptDir: string | undefined,
   loginPath: string,
   pinRunner: ComposeRunner,
   secrets: string[],
@@ -199,7 +210,9 @@ async function runTwoFactorStep(
 ): Promise<LoginResult> {
   let stdout = ''
   try {
-    const result = await pinRunner('sh', ['-c', twoFactor.pinCommand])
+    // Run the env-specific pinCommand in the scenario's script dir so it can reference
+    // scripts placed alongside the scenario (e.g. "bash get-2fa-pin.sh").
+    const result = await pinRunner('sh', ['-c', twoFactor.pinCommand], scriptDir ? { cwd: scriptDir } : undefined)
     stdout = result.stdout
   } catch (err) {
     return {
@@ -303,6 +316,8 @@ export async function authenticate(
     ],
     expectedResults: [{ kind: 'ui', description: 'authenticated', assertion: 'navigated past login' }],
     expectedDbState: [],
+    // 2FA config + script dir come from the designated login scenario via deps.
+    ...(deps.twoFactor ? { twoFactor: deps.twoFactor } : {}),
   }
   return executeLoginScenario(page, target, minimalScenario, creds, deps)
 }

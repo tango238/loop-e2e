@@ -316,19 +316,16 @@ describe('executeLoginScenario', () => {
 })
 
 describe('executeLoginScenario with 2FA', () => {
-  const twoFactorTarget: TargetEnv = {
-    name: 'local',
-    baseUrl: 'http://localhost:3000',
-    auth: {
-      strategy: 'form',
-      loginPath: '/login',
-      twoFactor: {
-        pinCommand: 'echo 123456',
-        pinFieldSelector: 'input[name="pin_code"]',
-        submitSelector: 'button[type="submit"]',
-      },
+  // 2FA is owned by the scenario (with its scriptDir), not the target.
+  const twoFactorScenario = {
+    ...loginScenario,
+    twoFactor: {
+      pinCommand: 'echo 123456',
+      pinFieldSelector: 'input[name="pin_code"]',
+      submitSelector: 'button[type="submit"]',
     },
-  }
+    scriptDir: '/scripts/admin-login',
+  } as unknown as Parameters<typeof executeLoginScenario>[2]
 
   // Fake page that advances: /login -> (cred submit) /two-factor-auth -> (pin submit) /
   function makeTwoFactorPage() {
@@ -357,8 +354,8 @@ describe('executeLoginScenario with 2FA', () => {
   it('runs the 2FA step: pinCommand -> fill pin -> submit -> dashboard', async () => {
     const { page, fills } = makeTwoFactorPage()
     const pinRunner = vi.fn(async () => ({ stdout: '  123456\n', stderr: '' }))
-    const res = await executeLoginScenario(page, twoFactorTarget, loginScenario, creds, { pinRunner })
-    expect(pinRunner).toHaveBeenCalledWith('sh', ['-c', 'echo 123456'])
+    const res = await executeLoginScenario(page, baseTarget, twoFactorScenario, creds, { pinRunner })
+    expect(pinRunner).toHaveBeenCalledWith('sh', ['-c', 'echo 123456'], { cwd: '/scripts/admin-login' })
     expect(fills.some((f) => f.sel.includes('pin_code') && f.val === '123456')).toBe(true)
     expect(res.ok).toBe(true)
     expect(res.finalUrl).toBe('http://localhost:3000/')
@@ -367,7 +364,7 @@ describe('executeLoginScenario with 2FA', () => {
   it('fails when pinCommand output has no digits, without leaking the password', async () => {
     const { page } = makeTwoFactorPage()
     const pinRunner = vi.fn(async () => ({ stdout: 'no code here', stderr: '' }))
-    const res = await executeLoginScenario(page, twoFactorTarget, loginScenario, creds, { pinRunner })
+    const res = await executeLoginScenario(page, baseTarget, twoFactorScenario, creds, { pinRunner })
     expect(res.ok).toBe(false)
     expect(res.detail).toMatch(/pin not found/i)
     expect(res.detail).not.toContain(creds.password)
@@ -390,7 +387,7 @@ describe('executeLoginScenario with 2FA', () => {
   it('never includes the PIN value in the detail', async () => {
     const { page } = makeTwoFactorPage()
     const pinRunner = vi.fn(async () => ({ stdout: '123456', stderr: '' }))
-    const res = await executeLoginScenario(page, twoFactorTarget, loginScenario, creds, { pinRunner })
+    const res = await executeLoginScenario(page, baseTarget, twoFactorScenario, creds, { pinRunner })
     expect(res.detail).not.toContain('123456')
   })
 
@@ -404,7 +401,7 @@ describe('executeLoginScenario with 2FA', () => {
       }),
     }))
     const pinRunner = vi.fn()
-    const res = await executeLoginScenario(page, twoFactorTarget, loginScenario, creds, { pinRunner })
+    const res = await executeLoginScenario(page, baseTarget, twoFactorScenario, creds, { pinRunner })
     expect(pinRunner).not.toHaveBeenCalled() // no 2FA page → no PIN step
     expect(res.ok).toBe(true)
   })
@@ -422,5 +419,31 @@ describe('authenticate', () => {
     const res = await authenticate(page, baseTarget, creds)
     expect(res.ok).toBe(true)
     expect(res.finalUrl).toBe('http://localhost:3000/dashboard')
+  })
+
+  it('runs 2FA using deps.twoFactor + deps.scriptDir (cwd) for the synthetic scenario', async () => {
+    let url = 'http://localhost:3000/login'
+    let clicks = 0
+    const page = {
+      goto: vi.fn(async (u: string) => { url = u }),
+      url: vi.fn(() => url),
+      title: vi.fn(async () => 't'),
+      content: vi.fn(async () => '<html></html>'),
+      evaluate: vi.fn(async () => ({})),
+      screenshot: vi.fn(async () => {}),
+      waitForLoadState: vi.fn(async () => {}),
+      locator: vi.fn(() => ({
+        fill: vi.fn(async () => {}),
+        click: vi.fn(async () => { clicks += 1; url = clicks === 1 ? 'http://localhost:3000/two-factor-auth' : 'http://localhost:3000/' }),
+      })),
+    } as unknown as PageLike
+    const pinRunner = vi.fn(async () => ({ stdout: '654321', stderr: '' }))
+    const res = await authenticate(page, baseTarget, creds, {
+      pinRunner,
+      twoFactor: { pinCommand: 'bash get-2fa-pin.sh', pinFieldSelector: 'input[name="pin_code"]', submitSelector: 'button[type="submit"]' },
+      scriptDir: '/scripts/admin-login',
+    })
+    expect(pinRunner).toHaveBeenCalledWith('sh', ['-c', 'bash get-2fa-pin.sh'], { cwd: '/scripts/admin-login' })
+    expect(res.ok).toBe(true)
   })
 })
