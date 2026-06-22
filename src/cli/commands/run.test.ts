@@ -696,3 +696,72 @@ describe('runRun', () => {
     expect(createPage).not.toHaveBeenCalled()
   })
 })
+
+describe('runRun — scenario execution stage', () => {
+  const authedScenario = {
+    id: 'grow-hotel',
+    title: 'View hotel page',
+    businessFlow: 'An authenticated admin views hotels',
+    steps: [{ action: 'navigate', target: '/hotel', expectedOutcome: 'Hotel page loads' }],
+    expectedResults: [{ kind: 'ui' as const, description: 'Hotel visible', assertion: 'heading shown' }],
+    expectedDbState: [],
+    precondition: { auth: 'authenticated' as const },
+  }
+
+  const ctxWithCreds = {
+    root: '/tmp/root',
+    runId: 'run-scn',
+    config: {
+      repositories: [],
+      targets: [{ name: 'admin', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+      databases: [],
+      schedule: { intervalMinutes: 60 },
+      scenarioDir: 'scenarios',
+      github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+      baseline: { commit: false },
+      models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+      ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+      refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+    },
+    secrets: { db: {}, targetAuth: { USERNAME: 'admin@x', PASSWORD: 'secret-pass' }, anthropicApiKey: '', githubToken: '' },
+  }
+
+  it('runs the scenario execution stage and merges findings into the report', async () => {
+    const executeScenarios = vi.fn().mockResolvedValue([
+      { category: 'scenario', severity: 'high', title: 'grow-hotel', detail: 'failed', evidence: 'grow-hotel' },
+    ])
+    const createPage = vi.fn().mockResolvedValue({ goto: vi.fn(), url: vi.fn(), title: vi.fn(), content: vi.fn(), evaluate: vi.fn(), screenshot: vi.fn(), waitForLoadState: vi.fn(), locator: vi.fn(), close: vi.fn().mockResolvedValue(undefined) })
+    let captured: VerifyFinding[] = []
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => { captured = d.verifyFindings }),
+      clock: () => 'run-scn',
+      scenarios: [authedScenario],
+      ctx: ctxWithCreds,
+      executeScenarios,
+      createPage,
+    }
+    await runRun('/tmp/root', { target: 'admin' }, deps)
+    expect(executeScenarios).toHaveBeenCalledOnce()
+    expect(captured.some((f) => f.category === 'scenario')).toBe(true)
+  })
+
+  it('skips the scenario stage when --skip-scenarios is set', async () => {
+    const executeScenarios = vi.fn()
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeReport: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-scn-skip',
+      scenarios: [authedScenario],
+      ctx: ctxWithCreds,
+      executeScenarios,
+      createPage: vi.fn(),
+    }
+    await runRun('/tmp/root', { target: 'admin', skipScenarios: true }, deps)
+    expect(executeScenarios).not.toHaveBeenCalled()
+  })
+})
