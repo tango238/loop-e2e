@@ -222,6 +222,45 @@ loop-e2e approve --all            # adopt every proposed scenario
 loop-e2e approve grow-hotel-list  # adopt specific ids
 ```
 
+### `rdra-export`
+
+Exports adopted scenarios into an [rdra-analyzer](https://github.com/tango238/rdra-analyzer)
+`analysis_result.json` so its RDRA modelling / CRUD-gap / viewer steps can run on loop-e2e's
+scenarios. loop-e2e owns the scenarios; rdra-analyzer owns the usecases (from its `analyze`).
+
+```
+rdra-analyzer analyze          # rdra produces usecases in analysis_result.json
+loop-e2e rdra-export           # merge route-matched scenarios in; hand off the rest
+rdra-analyzer reconcile        # rdra fact-checks unmatched scenarios → creates/links usecases
+rdra-analyzer rdra / verify / gap
+```
+
+```sh
+loop-e2e rdra-export
+loop-e2e rdra-export --into /path/to/output/usecases/analysis_result.json
+```
+
+Behaviour:
+- Each scenario is matched to a usecase by **route** — its first `navigate` path and its API
+  endpoints (`kind:'api'` expectedResults) are compared against the usecase's
+  `related_pages` / `related_routes` using a shared `normalizeRoute` (leading `GET/POST/…`
+  method token stripped, `ANY` = wildcard, path normalized). Priority:
+  navigate-exact > api-exact > navigate-prefix > api-prefix.
+- **Matched** scenarios are merged into `analysis_result.json` `scenarios[]`, tagged
+  `scenario_id = "LE-<id>"`. Re-running replaces only `LE-` scenarios (idempotent); usecases,
+  non-`LE-` scenarios, and unknown fields are preserved. The merged `api_endpoint` is a single
+  string (rdra reads it as a scalar).
+- **Unmatched** scenarios are written to `loop-e2e-pending.json` (same dir as `--into`) with
+  structured `api_endpoints` (`{method,path,raw}[]`) for rdra-analyzer's reconcile step to
+  fact-check against source and link to a usecase. If none are unmatched, no pending file.
+- The written `analysis_result.json` is always referentially valid (no dangling `usecase_id`);
+  a validation failure aborts the write.
+
+| Flag | Description |
+|------|-------------|
+| `--into <path>` | rdra-analyzer `analysis_result.json` (default: `<cwd>/output/usecases/analysis_result.json`) |
+| `--scenario-dir <dir>` | Scenario directory (default: `<cwd>/<config.scenarioDir>`) |
+
 ## Config file
 
 `.loop-e2e.yaml` in the project root:
