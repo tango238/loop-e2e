@@ -51,6 +51,15 @@ describe('proposeScenarios', () => {
     expect(result.map((s) => s.id)).toEqual(['grow-hotel', 'grow-hotel-2'])
   })
 
+  it('strips path separators from an unsafe LLM id (no traversal)', async () => {
+    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
+    const llm = makeLlm([validScenario('grow-../../x')])
+    const result = await proposeScenarios(llm, [rawPage('http://x/hotel')], { extractPageInfo })
+    expect(result[0].id).toMatch(/^grow-[A-Za-z0-9_-]+$/)
+    expect(result[0].id).not.toContain('/')
+    expect(result[0].id).not.toContain('.')
+  })
+
   it('returns empty array for no uncovered pages without calling the llm', async () => {
     const extractPageInfo = vi.fn()
     const llm = makeLlm([])

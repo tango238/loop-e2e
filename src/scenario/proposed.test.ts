@@ -60,4 +60,9 @@ describe('proposed scenarios + approve', () => {
   it('approve throws when the proposed scenario does not exist', async () => {
     await expect(approveScenario(dir, 'nope')).rejects.toThrow(/not found/)
   })
+
+  it('rejects path-traversal ids on save and approve', async () => {
+    await expect(saveProposedScenario(dir, scenario('../../etc/evil'))).rejects.toThrow(/invalid scenario id/)
+    await expect(approveScenario(dir, '../active-secret')).rejects.toThrow(/invalid scenario id/)
+  })
 })

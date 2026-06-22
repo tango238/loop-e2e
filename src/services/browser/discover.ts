@@ -66,13 +66,8 @@ async function capture(page: PageLike, url: string): Promise<RawPage> {
   const finalUrl = page.url()
   const title = await page.title()
   const html = await page.content()
-  let meta: Record<string, string> = {}
-  try {
-    meta = await page.evaluate(() => ({}))
-  } catch {
-    meta = {}
-  }
-  return { url: finalUrl, title, html, meta, screenshotPath: '' }
+  // Discovery captures structure for coverage/proposal; meta is not needed here.
+  return { url: finalUrl, title, html, meta: {}, screenshotPath: '' }
 }
 
 /** Extract absolute, same-document `<a href>` links resolved against baseUrl. */

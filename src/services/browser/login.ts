@@ -122,9 +122,12 @@ export async function executeLoginScenario(
     }
   }
 
-  // If 2FA is configured, the credential submit lands on the 2FA page; complete it.
+  // If 2FA is configured AND the credential submit landed on a 2FA page, complete it.
+  // If 2FA is configured but the app went straight to the dashboard (2FA remembered
+  // for this device, or the user has no 2FA), do NOT run the PIN step — the login
+  // already succeeded.
   const twoFactor = target.auth?.twoFactor
-  if (twoFactor) {
+  if (twoFactor && looksLikeTwoFactorPage(afterSubmitUrl)) {
     const secrets = [creds.username, creds.password, ...(deps.secrets ?? [])].filter(Boolean)
     return runTwoFactorStep(page, twoFactor, loginPath, deps.pinRunner ?? defaultPinRunner, secrets)
   }
@@ -181,11 +184,17 @@ async function runTwoFactorStep(
     ? new RegExp(twoFactor.successUrlPattern).test(finalUrl)
     : !urlMatchesPath(finalUrl, loginPath) && !finalUrl.toLowerCase().includes('two-factor')
 
+  const safeUrl = maskSecrets(finalUrl, maskWith)
   if (!ok) {
-    return { ok: false, detail: `2FA failed: still not authenticated (at ${finalUrl})`, finalUrl }
+    return { ok: false, detail: `2FA failed: still not authenticated (at ${safeUrl})`, finalUrl }
   }
   logger.info({ finalUrl }, '2FA passed; login succeeded')
-  return { ok: true, detail: `login succeeded: 2FA passed, navigated to ${finalUrl}`, finalUrl }
+  return { ok: true, detail: `login succeeded: 2FA passed, navigated to ${safeUrl}`, finalUrl }
+}
+
+/** Heuristic: does this URL look like a 2-factor / OTP verification page? */
+function looksLikeTwoFactorPage(url: string): boolean {
+  return /two-?factor|2fa|otp|mfa|verify/i.test(url)
 }
 
 /**

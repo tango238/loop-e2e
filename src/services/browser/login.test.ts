@@ -320,6 +320,21 @@ describe('executeLoginScenario with 2FA', () => {
     const res = await executeLoginScenario(page, twoFactorTarget, loginScenario, creds, { pinRunner })
     expect(res.detail).not.toContain('123456')
   })
+
+  it('does not run 2FA when the app skips the 2FA page (lands on dashboard)', async () => {
+    // twoFactor configured, but credential submit goes straight to /dashboard
+    const page = makeFakePage({ currentUrl: 'http://localhost:3000/login' })
+    ;(page.locator as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      fill: vi.fn(async () => {}),
+      click: vi.fn(async () => {
+        ;(page.url as ReturnType<typeof vi.fn>).mockReturnValue('http://localhost:3000/dashboard')
+      }),
+    }))
+    const pinRunner = vi.fn()
+    const res = await executeLoginScenario(page, twoFactorTarget, loginScenario, creds, { pinRunner })
+    expect(pinRunner).not.toHaveBeenCalled() // no 2FA page → no PIN step
+    expect(res.ok).toBe(true)
+  })
 })
 
 describe('authenticate', () => {

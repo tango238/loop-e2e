@@ -46,7 +46,10 @@ export async function proposeScenarios(
 function normalizeIds(scenarios: Scenario[]): Scenario[] {
   const seen = new Set<string>()
   return scenarios.map((s) => {
-    const base = s.id.startsWith('grow-') ? s.id : `grow-${slugify(s.id || s.title)}`
+    // Always slug the id (strip any 'grow-' the LLM added) so it is filename-safe
+    // — an LLM-returned id like "grow-../x" must not keep path separators.
+    const seed = s.id.replace(/^grow-/, '') || s.title
+    const base = `grow-${slugify(seed)}`
     let id = base
     let n = 2
     while (seen.has(id)) {
