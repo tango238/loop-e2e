@@ -28,15 +28,13 @@ describe.skipIf(!process.env.RUN_E2E)('executeScenarios (real machine)', () => {
         loginPath: process.env.E2E_LOGIN_PATH ?? '/login',
         username: process.env.ADMIN_USER ?? '',
         password: process.env.ADMIN_PASS ?? '',
-        twoFactor: process.env.E2E_PIN_COMMAND
-          ? {
-              pinCommand: process.env.E2E_PIN_COMMAND,
-              pinFieldSelector: 'input[name="pin_code"]',
-              submitSelector: 'button[type="submit"]',
-            }
-          : undefined,
       },
     }
+
+    // 2FA is now scenario-owned; for the gated E2E run, supply it via the login flow's deps.
+    const twoFactor = process.env.E2E_PIN_COMMAND
+      ? { pinCommand: process.env.E2E_PIN_COMMAND, pinFieldSelector: 'input[name="pin_code"]', submitSelector: 'button[type="submit"]' }
+      : undefined
 
     const scenario: Scenario = {
       id: 'grow-hotel',
@@ -62,7 +60,8 @@ describe.skipIf(!process.env.RUN_E2E)('executeScenarios (real machine)', () => {
         {
           authenticate,
           pinRunner: defaultComposeRunner,
-          pinCommand: target.auth?.twoFactor?.pinCommand,
+          twoFactor,
+          scriptDir: process.env.E2E_SCRIPT_DIR,
           secrets: [target.auth!.password!],
         },
       )

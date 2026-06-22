@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import type { TwoFactor, Grow } from '../config/schema.js'
+import type { Grow } from '../config/schema.js'
 
-export type { TwoFactor, Grow }
+export type { Grow }
 
 export type Secrets = {
   db: Record<string, string>
@@ -115,7 +115,6 @@ export type TargetEnv = {
     loginPath?: string
     username?: string
     password?: string
-    twoFactor?: TwoFactor
   }
 }
 

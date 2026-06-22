@@ -39,7 +39,7 @@ function makeDeps(over: Partial<RunGrowDeps> = {}): RunGrowDeps {
 }
 
 describe('runGrow', () => {
-  it('resolves target, credentials, 2FA, and scenarioDir into grow args', async () => {
+  it('resolves target, credentials, and scenarioDir into grow args (2FA is scenario-owned)', async () => {
     const deps = makeDeps()
     await runGrow('/base', {}, deps)
     expect(deps.grow).toHaveBeenCalledTimes(1)
@@ -47,7 +47,8 @@ describe('runGrow', () => {
     expect(growArgs.target.name).toBe('admin')
     expect(growArgs.target.auth.username).toBe('admin@example.com')
     expect(growArgs.target.auth.password).toBe('pw')
-    expect(growArgs.target.auth.twoFactor.pinCommand).toBe('echo 1')
+    // 2FA is no longer copied onto the target — it lives on the login scenario.
+    expect(growArgs.target.auth.twoFactor).toBeUndefined()
     expect(growArgs.scenarioDir).toBe('/base/scenarios')
     expect(growArgs.creds).toEqual({ username: 'admin@example.com', password: 'pw' })
   })

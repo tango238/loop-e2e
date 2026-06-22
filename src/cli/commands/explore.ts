@@ -41,7 +41,6 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
       loginPath: selected.auth.loginPath,
       username: creds.username,
       password: creds.password,
-      twoFactor: selected.auth.twoFactor,
     },
   }
 
@@ -63,7 +62,14 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
 
   // lazily import the heavy/real implementations
   const { authenticate } = await import('../../services/browser/login.js')
+  const { loadScenarios } = await import('../../scenario/schema.js')
+  const { findLoginScenario } = await import('../../scenario/loginScenario.js')
   const { discoverForms } = await import('../../services/explore/discover.js')
+
+  // The designated login scenario owns 2FA (pinCommand + scriptDir); use it for authentication.
+  const scenarioDirRaw = config.scenarioDir ?? 'scenarios'
+  const scenarioDir = scenarioDirRaw.startsWith('/') ? scenarioDirRaw : `${cwd}/${scenarioDirRaw}`
+  const loginScenario = findLoginScenario(await loadScenarios(scenarioDir), selected.auth.loginPath)
   const { inferCandidateTables, modelConstraints } = await import('../../services/explore/constraintModel.js')
   const { introspectTable } = await import('../../services/explore/dbIntrospect.js')
   const { generateCases, buildBaseline } = await import('../../services/explore/caseGen.js')
@@ -115,7 +121,12 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
       // [] and the 2xx gap signal would be dead — see review #1.)
       execDeps: { secrets: allSecrets, getLastStatus: () => lastStatus },
       createPage,
-      authenticate: (page, t, c) => authenticate(page, t, c, { pinRunner: defaultComposeRunner, secrets: allSecrets }),
+      authenticate: (page, t, c) => authenticate(page, t, c, {
+        pinRunner: defaultComposeRunner,
+        secrets: allSecrets,
+        twoFactor: loginScenario?.twoFactor,
+        scriptDir: loginScenario?.scriptDir,
+      }),
       discoverForms: (page, t, screens) => discoverForms(page, t, screens),
       inferCandidateTables,
       introspectTable,

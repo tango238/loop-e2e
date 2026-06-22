@@ -9,19 +9,13 @@ export const RepositorySchema = z.object({
   branch: z.string().optional(),
 })
 
-const TwoFactorSchema = z.object({
-  pinCommand: z.string().min(1),
-  pinFieldSelector: z.string().default('input[name="pin_code"]'),
-  submitSelector: z.string().default('button[type="submit"]'),
-  successUrlPattern: z.string().optional(),
-})
-
+// 2FA configuration lives on the login scenario (scenario.twoFactor), not on the target —
+// environment-specific glue (e.g. reading a PIN from mailpit) belongs with the scenario's scripts.
 export const AuthSchema = z.object({
   strategy: z.enum(['form', 'basic', 'none']),
   loginPath: z.string().optional(),
   usernameEnv: z.string().optional(),
   passwordEnv: z.string().optional(),
-  twoFactor: TwoFactorSchema.optional(),
 })
 
 export const TargetSchema = z.object({
@@ -102,6 +96,5 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>
 export type DbConfig = z.infer<typeof DbSchema>
-export type TwoFactor = z.infer<typeof TwoFactorSchema>
 export type Grow = z.infer<typeof GrowSchema>
 export const CONFIG_FILENAME = 'loop-e2e.config.yaml'

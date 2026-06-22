@@ -1,7 +1,8 @@
 import { logger } from '../util/logger.js'
 import type { Config } from '../config/schema.js'
 import type { TargetEnv, RawPage } from '../domain/types.js'
-import type { Scenario } from '../scenario/schema.js'
+import type { Scenario, LoadedScenario, ScenarioTwoFactor } from '../scenario/schema.js'
+import { findLoginScenario } from '../scenario/loginScenario.js'
 import type { Llm } from '../services/llm/client.js'
 import type { PageLike } from '../services/browser/crawler.js'
 import type { ComposeRunner } from '../services/compose/compose.js'
@@ -23,12 +24,12 @@ export type GrowDeps = {
     page: PageLike,
     target: TargetEnv,
     creds: { username: string; password: string },
-    deps?: { pinRunner?: ComposeRunner; secrets?: string[] },
+    deps?: { pinRunner?: ComposeRunner; secrets?: string[]; twoFactor?: ScenarioTwoFactor; scriptDir?: string },
   ) => Promise<LoginResult>
   discoverPages: (page: PageLike, target: TargetEnv, opts: Config['grow'] & object) => Promise<RawPage[]>
   findUncoveredPages: (discovered: RawPage[], scenarios: Scenario[]) => RawPage[]
   proposeScenarios: (llm: Llm, uncovered: RawPage[]) => Promise<Scenario[]>
-  loadScenarios: (dir: string) => Promise<Scenario[]>
+  loadScenarios: (dir: string) => Promise<LoadedScenario[]>
   saveProposedScenario: (dir: string, scenario: Scenario) => Promise<void>
   llm: Llm
   pinRunner?: ComposeRunner
@@ -57,14 +58,22 @@ export async function grow(args: GrowArgs, deps: GrowDeps): Promise<GrowResult> 
 
   const page = await deps.createPage()
 
+  // Load scenarios first so the designated login scenario can supply 2FA (pinCommand + scriptDir).
+  const existing = await deps.loadScenarios(scenarioDir)
+  const login = findLoginScenario(existing, target.auth?.loginPath)
+
   logger.info({ target: target.name }, 'grow: authenticating')
-  const auth = await deps.authenticate(page, target, creds, { pinRunner: deps.pinRunner, secrets: deps.secrets })
+  const auth = await deps.authenticate(page, target, creds, {
+    pinRunner: deps.pinRunner,
+    secrets: deps.secrets,
+    twoFactor: login?.twoFactor,
+    scriptDir: login?.scriptDir,
+  })
   if (!auth.ok) {
     throw new Error(`grow: authentication failed: ${auth.detail}`)
   }
 
   const discovered = await deps.discoverPages(page, target, config.grow ?? DEFAULT_GROW)
-  const existing = await deps.loadScenarios(scenarioDir)
   const uncovered = deps.findUncoveredPages(discovered, existing)
   logger.info({ discovered: discovered.length, uncovered: uncovered.length }, 'grow: coverage analyzed')
 

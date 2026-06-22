@@ -3,8 +3,8 @@ import type { RunContext, DiffFinding, VerifyFinding, SiteStructure, PriorState,
 import type { CollectResult } from '../../pipeline/collect.js'
 import type { WriteReportDeps } from '../../pipeline/report.js'
 import type { RunVerifyDeps } from '../../pipeline/verify/index.js'
-import type { Scenario } from '../../scenario/schema.js'
-import { isLoginScenario } from '../../scenario/loginScenario.js'
+import type { Scenario, LoadedScenario } from '../../scenario/schema.js'
+import { isLoginScenario, findLoginScenario } from '../../scenario/loginScenario.js'
 import type { DbDriverOptions } from '../../services/db/index.js'
 import type { PageLike } from '../../services/browser/crawler.js'
 import type { LoginResult } from '../../services/browser/login.js'
@@ -128,9 +128,6 @@ async function runLoginIfDetected(
     auth: {
       strategy: configTarget.auth.strategy,
       loginPath: configTarget.auth.loginPath,
-      // Forward 2FA config so the login stage can complete the PIN step (it previously
-      // omitted this, so `run`'s login never advanced past credentials into 2FA).
-      twoFactor: configTarget.auth.twoFactor,
     },
   }
 
@@ -143,6 +140,7 @@ async function runLoginIfDetected(
   }
 
   try {
+    // The login scenario carries its own twoFactor + scriptDir (from loadScenarios).
     const result = await deps.executeLogin(page, target, loginScenario, creds, deps.loginDeps)
     logger.info({ ok: result.ok, finalUrl: result.finalUrl }, 'Login execution complete')
 
@@ -204,7 +202,6 @@ async function runScenarioStage(
       loginPath: configTarget.auth.loginPath,
       username: creds.username,
       password: creds.password,
-      twoFactor: configTarget.auth.twoFactor,
     },
   }
 
@@ -216,8 +213,17 @@ async function runScenarioStage(
     return []
   }
 
+  // Authenticated-precondition scenarios re-use the login flow; supply the designated login
+  // scenario's 2FA config + scriptDir so the session can complete 2FA.
+  const login = findLoginScenario(scenarios as LoadedScenario[], loginPath)
+  const execDeps = {
+    ...deps.scenarioExecDeps,
+    twoFactor: login?.twoFactor,
+    scriptDir: login?.scriptDir,
+  }
+
   try {
-    return await deps.executeScenarios(page, target, toRun, creds, deps.scenarioExecDeps)
+    return await deps.executeScenarios(page, target, toRun, creds, execDeps)
   } catch (err) {
     logger.warn({ err: String(err) }, 'Scenario execution stage failed — continuing')
     return []

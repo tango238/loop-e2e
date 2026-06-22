@@ -88,7 +88,7 @@ describe('branch + setup schema', () => {
   })
 })
 
-describe('twoFactor + grow schema', () => {
+describe('grow schema', () => {
   const base = {
     repositories: [{ name: 'web', label: 'l', url: 'https://github.com/o/web', role: 'frontend', audience: 'user' }],
     targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form', loginPath: '/login', usernameEnv: 'U', passwordEnv: 'P' } }],
@@ -96,22 +96,13 @@ describe('twoFactor + grow schema', () => {
     github: { labels: { ready: 'Ready', autoDetect: 'Auto-Detect' } },
   }
 
-  it('accepts twoFactor on auth and grow config with defaults', () => {
-    const cfg = ConfigSchema.parse({
-      ...base,
-      targets: [{ ...base.targets[0], auth: { ...base.targets[0].auth, twoFactor: { pinCommand: 'echo 123456' } } }],
-      grow: {},
-    })
-    expect(cfg.targets[0].auth?.twoFactor?.pinCommand).toBe('echo 123456')
+  it('applies grow config defaults', () => {
+    const cfg = ConfigSchema.parse({ ...base, grow: {} })
     expect(cfg.grow?.maxPages).toBe(50)   // default
     expect(cfg.grow?.maxDepth).toBe(3)    // default
   })
-  it('omits twoFactor and grow when absent', () => {
-    const cfg = ConfigSchema.parse(base)
-    expect(cfg.targets[0].auth?.twoFactor).toBeUndefined()
-    expect(cfg.grow).toBeUndefined()
+  it('omits grow when absent', () => {
+    expect(ConfigSchema.parse(base).grow).toBeUndefined()
   })
-  it('rejects twoFactor with empty pinCommand', () => {
-    expect(() => ConfigSchema.parse({ ...base, targets: [{ ...base.targets[0], auth: { ...base.targets[0].auth, twoFactor: { pinCommand: '' } } }] })).toThrow()
-  })
+  // 2FA is no longer a config concept — it lives on the login scenario (scenario.twoFactor).
 })

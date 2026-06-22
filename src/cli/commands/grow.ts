@@ -71,7 +71,7 @@ function resolveCredentials(
   return { username, password }
 }
 
-/** Map a config target (env-name auth) to a domain TargetEnv with resolved creds + 2FA. */
+/** Map a config target (env-name auth) to a domain TargetEnv with resolved creds. */
 function toTargetEnv(
   target: Config['targets'][number],
   creds: { username: string; password: string },
@@ -86,7 +86,6 @@ function toTargetEnv(
           loginPath: auth.loginPath,
           username: creds.username,
           password: creds.password,
-          twoFactor: auth.twoFactor,
         }
       : undefined,
   }

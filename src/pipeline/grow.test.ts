@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { grow, type GrowDeps, type GrowArgs } from './grow.js'
 import type { Config } from '../config/schema.js'
 import type { TargetEnv, RawPage } from '../domain/types.js'
-import type { Scenario } from '../scenario/schema.js'
+import type { Scenario, LoadedScenario } from '../scenario/schema.js'
 import type { Llm } from '../services/llm/client.js'
 
 const target: TargetEnv = {
@@ -22,10 +22,11 @@ const args: GrowArgs = {
 }
 
 const rawPage = (url: string): RawPage => ({ url, title: 't', html: '', meta: {}, screenshotPath: '' })
-const scenario = (id: string): Scenario => ({
+const scenario = (id: string): LoadedScenario => ({
   id, title: id, businessFlow: 'f',
   steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }],
   expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+  scriptDir: `/base/scenarios/${id}`,
 })
 
 function makeDeps(over: Partial<GrowDeps> = {}): GrowDeps {
