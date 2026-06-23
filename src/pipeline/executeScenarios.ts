@@ -23,6 +23,8 @@ export type ExecuteScenariosDeps = ScenarioExecDeps &
     ensureUnauthenticated?: typeof defaultEnsureUnauth
     /** env source for persona credEnv resolution (defaults to process.env) */
     secretsEnv?: Record<string, string | undefined>
+    /** Resolve a persona's target name → its TargetEnv + credentials (built from config.targets). */
+    resolveTarget?: (name: string) => { target: TargetEnv; creds: Creds } | undefined
   }
 
 /** The auth probe target for an authenticated scenario is its first navigate step (default '/'). */
@@ -73,7 +75,7 @@ function scenarioFinding(scenario: Scenario, ok: boolean, detail: string, finalU
  */
 async function runMultiAct(
   page: PageLike,
-  target: TargetEnv,
+  runTarget: TargetEnv,
   scenario: Scenario,
   runCreds: Creds,
   deps: ExecuteScenariosDeps,
@@ -88,25 +90,30 @@ async function runMultiAct(
   const vars: Record<string, string> = { ...(deps.vars ?? {}) }
   const acts = scenario.acts ?? []
   let prevPersona: string | undefined
+  let prevTargetName: string | undefined
   let lastUrl = ''
-  let deferredTarget = false
 
   for (let ai = 0; ai < acts.length; ai++) {
     const act = acts[ai]
     const persona = act.persona ? personas.get(act.persona) : undefined
-    if (persona?.target && persona.target !== target.name) {
-      deferredTarget = true
-      logger.warn(
-        { scenario: scenario.id, persona: persona.name, target: persona.target },
-        'multi-act: persona.target other than the run target is deferred to Phase3 — using run target',
-      )
-    }
-    const auth = persona?.auth ?? scenario.precondition?.auth ?? 'authenticated'
     const label = `act ${ai} (persona ${persona?.name ?? '-'})`
 
+    // Resolve the act's target: persona.target → another configured target, else the run target.
+    let actTarget = runTarget
+    let baseCreds = runCreds
+    if (persona?.target) {
+      const resolved = deps.resolveTarget?.(persona.target)
+      if (!resolved) {
+        return scenarioFinding(scenario, false, `${label} unknown target '${persona.target}' (not in config.targets)`, lastUrl)
+      }
+      actTarget = resolved.target
+      baseCreds = resolved.creds
+    }
+
+    const auth = persona?.auth ?? scenario.precondition?.auth ?? 'authenticated'
     let actSecrets = deps.secrets ?? []
     if (auth === 'authenticated') {
-      const personaCreds = resolvePersonaCreds(persona, runCreds, env)
+      const personaCreds = resolvePersonaCreds(persona, baseCreds, env)
       if (persona?.credEnv && (!personaCreds.username || !personaCreds.password)) {
         return scenarioFinding(
           scenario, false,
@@ -115,28 +122,28 @@ async function runMultiAct(
         )
       }
       actSecrets = [...(deps.secrets ?? []), personaCreds.username, personaCreds.password].filter(Boolean)
-      const forceReauth = ai > 0 && persona?.name !== prevPersona
-      const r = await ensureAuth(page, target, personaCreds, firstNavOf(act.steps), { ...deps, secrets: actSecrets, forceReauth })
+      // Re-login only when switching identity ON THE SAME target; a different target is a separate domain/session.
+      const forceReauth = ai > 0 && actTarget.name === prevTargetName && persona?.name !== prevPersona
+      const r = await ensureAuth(page, actTarget, personaCreds, firstNavOf(act.steps), { ...deps, secrets: actSecrets, forceReauth })
       if (!r.ok) {
         return scenarioFinding(scenario, false, `${label} auth failed: ${r.detail}`, lastUrl)
       }
     } else {
-      await ensureUnauth(page, target, deps)
+      await ensureUnauth(page, actTarget, deps)
     }
     prevPersona = persona?.name
+    prevTargetName = actTarget.name
 
-    const res = await exec(page, target, act.steps, { ...deps, secrets: actSecrets, vars })
+    const res = await exec(page, actTarget, act.steps, { ...deps, secrets: actSecrets, vars })
     lastUrl = res.finalUrl
     if (!res.ok) {
       return scenarioFinding(scenario, false, `${label} ${res.detail}`, res.finalUrl)
     }
-    logger.info({ scenario: scenario.id, act: ai, persona: persona?.name }, 'act executed')
+    logger.info({ scenario: scenario.id, act: ai, persona: persona?.name, target: actTarget.name }, 'act executed')
   }
 
   const stepCount = acts.reduce((n, a) => n + a.steps.length, 0)
-  let detail = `passed (${acts.length} acts, ${stepCount} steps)`
-  if (deferredTarget) detail += ' | note: a persona.target other than the run target was ignored (cross-target is Phase3)'
-  return scenarioFinding(scenario, true, detail, lastUrl)
+  return scenarioFinding(scenario, true, `passed (${acts.length} acts, ${stepCount} steps)`, lastUrl)
 }
 
 /**

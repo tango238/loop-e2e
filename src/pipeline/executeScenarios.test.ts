@@ -205,3 +205,42 @@ describe('executeScenarios multi-act fixes', () => {
     expect(findings[0].detail).toMatch(/credEnv not set.*REV_U/)
   })
 })
+
+const crossScn = (): Scenario => ({
+  id: 'cross', title: 'cross', businessFlow: 'f',
+  personas: [
+    { name: 'admin', target: 'admin', auth: 'authenticated' },
+    { name: 'shopper', target: 'storefront', auth: 'authenticated' },
+  ],
+  acts: [
+    { persona: 'admin', steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }] },
+    { persona: 'shopper', steps: [{ action: 'navigate', target: '/buy', expectedOutcome: 'o' }] },
+  ],
+  expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+})
+
+describe('executeScenarios multi-target', () => {
+  const storefront = { name: 'storefront', baseUrl: 'https://shop.test', auth: { strategy: 'form', loginPath: '/login' } } as TargetEnv
+  const resolveTarget = (name: string) =>
+    name === 'admin' ? { target, creds } :
+    name === 'storefront' ? { target: storefront, creds: { username: 's', password: 'sp' } } : undefined
+
+  it('runs each act against its persona.target and does NOT force reauth across targets', async () => {
+    const ensureAuthenticated = vi.fn(async () => ({ ok: true, detail: 'ok' }))
+    const targetsSeen: string[] = []
+    const executeSteps = vi.fn(async (_p: unknown, t: TargetEnv) => { targetsSeen.push(t.name); return { ok: true, detail: 'passed', finalUrl: 'u' } })
+    const findings = await executeScenarios(page, target, [crossScn()], creds, { ensureAuthenticated, executeSteps, resolveTarget })
+    expect(targetsSeen).toEqual(['admin', 'storefront'])
+    const secondCall = ensureAuthenticated.mock.calls[1] as unknown as [unknown, TargetEnv, unknown, unknown, { forceReauth?: boolean }]
+    expect(secondCall[1].name).toBe('storefront')
+    expect(secondCall[4].forceReauth).toBe(false)
+    expect(findings[0].severity).toBe('low')
+  })
+
+  it('fails with a clear finding when persona.target is not resolvable', async () => {
+    const bad: Scenario = { ...crossScn(), personas: [{ name: 'admin', target: 'ghost', auth: 'authenticated' }], acts: [{ persona: 'admin', steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }] }] }
+    const findings = await executeScenarios(page, target, [bad], creds, { ensureAuthenticated: vi.fn(async () => ({ ok: true, detail: 'ok' })), executeSteps: vi.fn(), resolveTarget: () => undefined })
+    expect(findings[0].severity).toBe('high')
+    expect(findings[0].detail).toMatch(/unknown target 'ghost'/)
+  })
+})
