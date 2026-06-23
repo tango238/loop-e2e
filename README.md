@@ -57,12 +57,13 @@ prepare (repo refresh → setup hooks) → collect → diff → verify → (logi
 3. **diff** — Compares current structure against baseline; detects missing transitions, changed items, expectation gaps.
 4. **verify** — Runs 5 verify categories: layout, security, conditional rendering, registered data, error handling.
 5. **scenarios** — Executes adopted scenarios' steps against the live app (see [Scenario execution](#scenario-execution-auth-preconditions) below). Skipped with `--skip-scenarios`.
-6. **report** — Adjudicates each finding with an Opus refutation panel; files GitHub issues for high-confidence bugs; writes `report.json` + `report.md` under `.loop-e2e/reports/<runId>/`.
+6. **persist** — Writes the run's findings to the shared **findings store** (`.loop-e2e/findings/`) + the baseline, then (unless `--no-report`) invokes the `report` aggregation. See [Findings store & report](#findings-store--report).
 
 ```sh
 loop-e2e run --target staging
 loop-e2e run --skip-prepare     # Skip repo refresh and setup hooks
 loop-e2e run --skip-scenarios   # Skip executing adopted scenarios
+loop-e2e run --no-report        # Write findings only; aggregate later with `loop-e2e report`
 ```
 
 ### Scenario execution (auth preconditions)
@@ -294,6 +295,34 @@ Behaviour:
 | `--screen <path...>` | Screen path(s) to explore (repeatable) |
 | `--skip-prepare` | Skip the pre-run prepare phase (repo refresh + setup hooks) |
 | `--no-reseed` | Do not re-seed after the run (skips the dev-guard) |
+| `--no-report` | Write findings to the store only; aggregate later with `loop-e2e report` |
+
+### Findings store & report
+
+Findings are the common currency. `run` and `explore` each write their findings to a shared
+**findings store** (`.loop-e2e/findings/`); `grow` and `scenario` record a one-line **activity**
+summary. The standalone **`report`** command aggregates everything into a single report:
+
+- reads all pending findings + activity,
+- de-duplicates across sources (by fingerprint — e.g. the same page flagged by both `run` and
+  `explore` collapses to one),
+- runs the Opus refutation gate once, files GitHub issues for high-confidence bugs,
+- writes one `report.md`/`report.json` (with a 実施サマリ section + a **ページ** line per finding),
+- archives the consumed entries so the next `report` starts clean.
+
+By default `run`/`explore` auto-invoke `report` at the end (single-command UX, unchanged). Pass
+`--no-report` to decouple, then aggregate once at the end:
+
+```sh
+loop-e2e run --no-report
+loop-e2e explore --screen /user/create --no-report
+loop-e2e report          # one report + issues covering both run and explore
+```
+
+```sh
+loop-e2e report                 # aggregate all pending findings/activity
+loop-e2e report --target staging
+```
 
 ## Config file
 
