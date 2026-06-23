@@ -25,7 +25,7 @@ const secrets: Secrets = {
 function makeDeps(over: Partial<RunGrowDeps> = {}): RunGrowDeps {
   return {
     loadConfig: vi.fn(async () => ({ config, secrets })),
-    grow: vi.fn(async () => ({ discovered: 1, uncovered: 1, proposed: [], mode: 'crawl' as const, requirementsRepos: 0 })),
+    grow: vi.fn(async () => ({ discovered: 1, uncovered: 1, proposed: [], mode: 'crawl' as const, requirementsRepos: 0, sourceError: false })),
     createPage: vi.fn(),
     authenticate: vi.fn(),
     discoverPages: vi.fn(),

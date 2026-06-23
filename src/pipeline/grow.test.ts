@@ -59,7 +59,7 @@ describe('grow', () => {
     const order = (deps as unknown as { _order: string[] })._order
     const result = await grow(args, deps)
     expect(order).toEqual(['prepare', 'authenticate', 'discover', 'coverage', 'propose', 'save'])
-    expect(result).toEqual({ discovered: 1, uncovered: 1, proposed: [scenario('grow-hotel')], mode: 'full', requirementsRepos: 1 })
+    expect(result).toEqual({ discovered: 1, uncovered: 1, proposed: [scenario('grow-hotel')], mode: 'full', requirementsRepos: 1, sourceError: false })
     expect(deps.saveProposedScenario).toHaveBeenCalledWith('/base/scenarios', scenario('grow-hotel'))
   })
 

@@ -56,6 +56,9 @@ export type GrowResult = {
   proposed: Scenario[]
   mode: 'full' | 'source' | 'crawl'
   requirementsRepos: number
+  /** True when source/requirement collection threw and was degraded to empty (distinguishes a
+   * genuine "nothing to propose" from "the static understanding source silently collapsed"). */
+  sourceError: boolean
 }
 
 const DEFAULT_GROW = { maxPages: 50, maxDepth: 3, excludePaths: [] as string[] }
@@ -84,6 +87,7 @@ export async function grow(args: GrowArgs, deps: GrowDeps): Promise<GrowResult> 
 
   // --- static understanding (source / requirements) ---
   let requirements: RequirementContext[] = []
+  let sourceError = false
   if (!crawlOnly) {
     try {
       requirements = await deps.collectRequirements(config.repositories, {
@@ -94,6 +98,7 @@ export async function grow(args: GrowArgs, deps: GrowDeps): Promise<GrowResult> 
         fromPaths: args.fromPaths,
       })
     } catch (err) {
+      sourceError = true
       logger.warn({ err: String(err) }, 'grow: requirement collection failed — continuing without source context')
     }
   }
@@ -131,5 +136,11 @@ export async function grow(args: GrowArgs, deps: GrowDeps): Promise<GrowResult> 
   }
   logger.info({ proposed: fresh.length, mode }, 'grow: proposed scenarios saved')
 
-  return { discovered: discoveredCount, uncovered: uncovered.length, proposed: fresh, mode, requirementsRepos: requirements.length }
+  // Distinguish "fully covered" from "both understanding sources collapsed".
+  if (fresh.length === 0 && (sourceError || (mode === 'full' && requirements.length === 0 && uncovered.length === 0))) {
+    logger.warn({ mode, sourceError, requirementsRepos: requirements.length, uncovered: uncovered.length },
+      'grow: 0 scenarios proposed — verify this means full coverage, not failed understanding (source/crawl)')
+  }
+
+  return { discovered: discoveredCount, uncovered: uncovered.length, proposed: fresh, mode, requirementsRepos: requirements.length, sourceError }
 }

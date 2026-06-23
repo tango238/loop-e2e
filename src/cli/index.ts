@@ -390,6 +390,9 @@ program
           `source-repos ${result.requirementsRepos} → proposed ${result.proposed.length} → ${config.scenarioDir}/proposed/\n` +
           `Review with 'loop-e2e approve --all' (or per id) to adopt them.\n`,
       )
+      if (result.sourceError) {
+        process.stderr.write('grow: WARNING — source/requirement collection failed; proposals are crawl-only this run.\n')
+      }
     } catch (err) {
       process.stderr.write(`grow failed: ${err instanceof Error ? err.message : String(err)}\n`)
       process.exit(1)

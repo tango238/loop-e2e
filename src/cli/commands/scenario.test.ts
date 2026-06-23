@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { runScenario } from './scenario.js'
 
 type GrowCallOpts = { sourceOnly?: boolean; fromPaths?: string[] }
-const sourceResult = { discovered: 0, uncovered: 0, proposed: [], mode: 'source' as const, requirementsRepos: 0 }
+const sourceResult = { discovered: 0, uncovered: 0, proposed: [], mode: 'source' as const, requirementsRepos: 0, sourceError: false }
 
 describe('runScenario (deprecated alias of grow --source-only)', () => {
   it('delegates to runGrow with sourceOnly + fromPaths and warns deprecation', async () => {

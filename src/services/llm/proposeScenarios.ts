@@ -30,13 +30,17 @@ export type ProposeDeps = {
   batchSize?: number
 }
 
-/** Brief, bounded summary of source/requirement context to fuse into page-proposal prompts. */
-export function summarizeRequirements(reqs: RequirementContext[], maxChars = 2000): string {
+/**
+ * Brief, bounded summary of source/requirement context to fuse into page-proposal prompts.
+ * Kept small on purpose: it is appended to EVERY page batch prompt, so total fused tokens grow
+ * with the number of batches — the source-derived (b) path uses the full contexts separately.
+ */
+export function summarizeRequirements(reqs: RequirementContext[], maxChars = 1000): string {
   if (reqs.length === 0) return ''
   const parts = reqs.map((r) => {
     const head = `### ${r.repo.name} (${r.repo.role}/${r.repo.audience})`
-    const readme = r.readme ? r.readme.slice(0, 400) : ''
-    const code = r.codeSummary ? r.codeSummary.slice(0, 600) : ''
+    const readme = r.readme ? r.readme.slice(0, 300) : ''
+    const code = r.codeSummary ? r.codeSummary.slice(0, 400) : ''
     return [head, readme, code].filter(Boolean).join('\n')
   })
   return parts.join('\n\n').slice(0, maxChars)
