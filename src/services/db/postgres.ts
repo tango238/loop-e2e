@@ -1,6 +1,11 @@
+import { createRequire } from 'node:module'
 import { maskSecrets } from '../../util/mask.js'
 import type { DbAdapter, Row } from './adapter.js'
 import type { DbConfig } from '../../config/schema.js'
+
+// `require` is not defined in ESM; this shim lets us lazily load the optional `pg` driver
+// (kept out of the module graph so unit tests with injected fakes never need it installed).
+const require = createRequire(import.meta.url)
 
 /** Minimal interface for a pg Pool — injectable for unit tests */
 export interface PgPool {
