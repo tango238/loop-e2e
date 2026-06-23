@@ -1,160 +1,26 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { stringify } from 'yaml'
-import { runScenario, type ScenarioDeps } from './scenario.js'
-import { saveScenario, loadScenarios, type Scenario } from '../../scenario/schema.js'
-import type { Llm } from '../../services/llm/client.js'
-import type { RequirementContext } from '../../services/repo/reader.js'
+import { describe, it, expect, vi } from 'vitest'
+import { runScenario } from './scenario.js'
 
-// Minimal valid scenario
-const scenario1: Scenario = {
-  id: 'sc-001',
-  title: 'Login flow',
-  businessFlow: 'User logs in with email',
-  steps: [
-    { action: 'navigate', target: '/login', expectedOutcome: 'Login page shown' },
-    { action: 'fill', target: 'email', input: 'a@b.com', expectedOutcome: 'Email filled' },
-  ],
-  expectedResults: [{ kind: 'ui', description: 'Dashboard shown', assertion: 'URL is /dashboard' }],
-  expectedDbState: [],
-}
+type GrowCallOpts = { sourceOnly?: boolean; fromPaths?: string[] }
+const sourceResult = { discovered: 0, uncovered: 0, proposed: [], mode: 'source' as const, requirementsRepos: 0 }
 
-const scenario2: Scenario = {
-  id: 'sc-002',
-  title: 'Logout flow',
-  businessFlow: 'User logs out',
-  steps: [
-    { action: 'click', target: 'logout-button', expectedOutcome: 'Session cleared' },
-  ],
-  expectedResults: [{ kind: 'ui', description: 'Login page shown', assertion: 'URL is /login' }],
-  expectedDbState: [],
-}
-
-const mockContext: RequirementContext = {
-  repo: {
-    name: 'app',
-    label: 'App',
-    url: 'https://github.com/acme/app',
-    role: 'frontend',
-    audience: 'user',
-  },
-  readme: '# App',
-  docs: [],
-  codeSummary: 'React app',
-  gitlogSummary: 'abc Initial commit',
-}
-
-async function writeConfig(dir: string, scenarioDir: string): Promise<void> {
-  const config = {
-    repositories: [{ name: 'app', label: 'App', url: 'https://github.com/acme/app', role: 'frontend', audience: 'user' }],
-    targets: [{ name: 'staging', baseUrl: 'https://staging.example.com' }],
-    databases: [],
-    schedule: { intervalMinutes: 60 },
-    scenarioDir,
-    github: { labels: { ready: 'ready', autoDetect: 'auto' } },
-  }
-  await writeFile(join(dir, 'loop-e2e.config.yaml'), stringify(config), 'utf8')
-}
-
-function makeMockLlm(): Llm {
-  const mock = vi.fn(async () => [scenario1, scenario2])
-  return { complete: mock } as unknown as Llm
-}
-
-describe('runScenario', () => {
-  let root: string
-  let scenarioDir: string
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'loop-e2e-scenario-cmd-'))
-    scenarioDir = join(root, 'scenarios')
-    await mkdir(scenarioDir, { recursive: true })
-    await writeConfig(root, scenarioDir)
-
-    // Set required env vars
-    process.env['ANTHROPIC_API_KEY'] = 'test-key'
-    process.env['GITHUB_TOKEN'] = 'test-gh-token'
+describe('runScenario (deprecated alias of grow --source-only)', () => {
+  it('delegates to runGrow with sourceOnly + fromPaths and warns deprecation', async () => {
+    const runGrow = vi.fn(async () => sourceResult)
+    const warn = vi.fn()
+    await runScenario('/cwd', { from: ['docs/a.md'] }, { runGrow, warn } as never)
+    expect(runGrow).toHaveBeenCalledOnce()
+    const [root, opts] = runGrow.mock.calls[0] as unknown as [string, GrowCallOpts]
+    expect(root).toBe('/cwd')
+    expect(opts.sourceOnly).toBe(true)
+    expect(opts.fromPaths).toEqual(['docs/a.md'])
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/deprecated|grow --source-only/i))
   })
 
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
-    delete process.env['ANTHROPIC_API_KEY']
-    delete process.env['GITHUB_TOKEN']
-  })
-
-  function makeDeps(overrides: Partial<ScenarioDeps> = {}): ScenarioDeps {
-    return {
-      llm: makeMockLlm(),
-      collectRequirements: async () => [mockContext],
-      generateScenarios: async () => [scenario1, scenario2],
-      confirm: async () => true,
-      ...overrides,
-    }
-  }
-
-  it('saves generated scenarios to scenarioDir', async () => {
-    await runScenario(root, {}, makeDeps())
-
-    const saved = await loadScenarios(scenarioDir)
-    expect(saved.map((s) => s.id).sort()).toEqual(['sc-001', 'sc-002'])
-  })
-
-  it('skips overwrite when confirm returns false', async () => {
-    // Pre-save a scenario so it shows up as existing
-    await saveScenario(scenarioDir, { ...scenario1, title: 'Old title' })
-
-    await runScenario(root, {}, makeDeps({ confirm: async () => false }))
-
-    // The old title should remain because we declined the overwrite
-    const saved = await loadScenarios(scenarioDir)
-    const sc1 = saved.find((s) => s.id === 'sc-001')
-    expect(sc1?.title).toBe('Old title')
-  })
-
-  it('overwrites when confirm returns true', async () => {
-    await saveScenario(scenarioDir, { ...scenario1, title: 'Old title' })
-
-    await runScenario(root, {}, makeDeps({ confirm: async () => true }))
-
-    const saved = await loadScenarios(scenarioDir)
-    const sc1 = saved.find((s) => s.id === 'sc-001')
-    expect(sc1?.title).toBe('Login flow')
-  })
-
-  it('skips unchanged scenarios without prompting', async () => {
-    await saveScenario(scenarioDir, scenario1)
-    const confirmSpy = vi.fn(async () => true)
-
-    await runScenario(root, {}, makeDeps({ confirm: confirmSpy, generateScenarios: async () => [scenario1] }))
-
-    // Unchanged scenario should not trigger confirm
-    expect(confirmSpy).not.toHaveBeenCalled()
-  })
-
-  it('passes --from paths to collectRequirements', async () => {
-    const capturedDeps: Array<Parameters<typeof import('../../services/repo/reader.js').collectRequirements>[1]> = []
-    const deps = makeDeps({
-      collectRequirements: async (_repos, d) => {
-        capturedDeps.push(d)
-        return [mockContext]
-      },
-    })
-
-    await runScenario(root, { from: ['/path/to/req.md'] }, deps)
-
-    expect(capturedDeps[0]?.fromPaths).toEqual(['/path/to/req.md'])
-  })
-
-  it('saves scenarios that do not yet exist without prompting', async () => {
-    const confirmSpy = vi.fn(async () => true)
-
-    await runScenario(root, {}, makeDeps({ confirm: confirmSpy }))
-
-    // New scenarios should not require confirm
-    expect(confirmSpy).not.toHaveBeenCalled()
-    const saved = await loadScenarios(scenarioDir)
-    expect(saved).toHaveLength(2)
+  it('works without --from (fromPaths undefined)', async () => {
+    const runGrow = vi.fn(async () => sourceResult)
+    await runScenario('/cwd', {}, { runGrow, warn: vi.fn() } as never)
+    const [, opts] = runGrow.mock.calls[0] as unknown as [string, GrowCallOpts]
+    expect(opts.fromPaths).toBeUndefined()
   })
 })

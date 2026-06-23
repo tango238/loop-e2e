@@ -12,12 +12,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { runInit, type InitDeps } from '../../src/cli/commands/init.js'
-import { runScenario, type ScenarioDeps } from '../../src/cli/commands/scenario.js'
+import { runScenario } from '../../src/cli/commands/scenario.js'
 import { runRun, type RunDeps } from '../../src/cli/commands/run.js'
 import { runDown, type DownDeps } from '../../src/cli/commands/down.js'
 
 import { loadProcessState } from '../../src/state/process.js'
-import { loadScenarios } from '../../src/scenario/schema.js'
+import { loadScenarios, saveProposedScenario, loadProposedScenarios, approveScenario } from '../../src/scenario/schema.js'
 import { statePaths } from '../../src/state/paths.js'
 import { ensureDir } from '../../src/util/fs.js'
 
@@ -234,15 +234,17 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
 
     try {
       const loginScenario = makeLoginScenario()
-      const scenarioDeps: ScenarioDeps = {
-        llm: {
-          complete: vi.fn().mockResolvedValue('mock LLM response'),
-        } as never,
-        collectRequirements: vi.fn().mockResolvedValue([]),
-        generateScenarios: vi.fn().mockResolvedValue([loginScenario]),
-        confirm: vi.fn().mockResolvedValue(true),
-      }
-      await runScenario(root, {}, scenarioDeps)
+      // scenario is now `grow --source-only`: proposes drafts into proposed/ (no live crawl).
+      await runScenario(root, {}, {
+        warn: vi.fn(),
+        growDeps: {
+          llm: { complete: vi.fn().mockResolvedValue('mock LLM response') } as never,
+          collectRequirements: vi.fn().mockResolvedValue([]),
+          proposeScenarios: vi.fn().mockResolvedValue([loginScenario]),
+          loadScenarios,
+          saveProposedScenario,
+        },
+      })
     } finally {
       for (const [key, val] of Object.entries(envStubs)) {
         if (val === undefined) {
@@ -253,14 +255,19 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
       }
     }
 
-    // --- Assert: scenario file exists on disk ---
+    // --- Assert: proposed draft exists, then approve → active ---
     const scenarioDir = config.scenarioDir
+    const proposed = await loadProposedScenarios(scenarioDir)
+    expect(proposed).toHaveLength(1)
+    expect(proposed[0]?.id).toBe('login-flow')
+    await approveScenario(scenarioDir, 'login-flow')
+
     const savedScenarios = await loadScenarios(scenarioDir)
     expect(savedScenarios).toHaveLength(1)
     expect(savedScenarios[0]?.id).toBe('login-flow')
     expect(savedScenarios[0]?.title).toContain('Login')
 
-    // --- Assert: scenario file physically exists ---
+    // --- Assert: scenario file physically exists (active, after approve) ---
     await expect(access(join(scenarioDir, 'login-flow.scenario.yaml'))).resolves.toBeUndefined()
 
     // -----------------------------------------------------------------------

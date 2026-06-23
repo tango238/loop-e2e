@@ -90,11 +90,38 @@ program
 
 program
   .command('scenario')
-  .description('Generate E2E test scenarios from repository requirements using AI')
+  .description('[deprecated] Alias of `grow --source-only` — propose scenarios from repository source')
   .option('--from <paths...>', 'Additional requirement files to merge into context')
   .action(async (opts: { from?: string[] }) => {
+    const cwd = process.cwd()
+    const { runGrow } = await import('./commands/grow.js')
+    const { prepare } = await import('../pipeline/prepare.js')
+    const { authenticate } = await import('../services/browser/login.js')
+    const { discoverPages } = await import('../services/browser/discover.js')
+    const { findUncoveredPages } = await import('../services/grow/coverage.js')
+    const { proposeScenarios } = await import('../services/llm/proposeScenarios.js')
+    const { collectRequirements } = await import('../services/repo/reader.js')
+    const { loadScenarios, saveProposedScenario } = await import('../scenario/schema.js')
     const { appendActivity } = await import('../state/findings.js')
-    await runScenario(process.cwd(), { from: opts.from }, { appendActivity })
+    const loaded = await loadConfig(cwd)
+    const llm = createLlm(loaded.secrets.anthropicApiKey, loaded.config.models, { language: loaded.config.language })
+    await runScenario(cwd, { from: opts.from }, {
+      growDeps: {
+        prepare,
+        // --source-only never crawls, so createPage is never invoked.
+        createPage: () => Promise.reject(new Error('createPage is not available in --source-only')),
+        authenticate,
+        discoverPages,
+        findUncoveredPages,
+        proposeScenarios,
+        collectRequirements,
+        loadScenarios,
+        saveProposedScenario,
+        llm,
+        pinRunner: defaultComposeRunner,
+        appendActivity,
+      },
+    })
   })
 
 program
