@@ -4,6 +4,7 @@ import type { PageLike } from './crawler.js'
 import type { TargetEnv } from '../../domain/types.js'
 import type { Scenario, ScenarioStep, LoadedScenario } from '../../scenario/schema.js'
 import type { ComposeRunner } from '../compose/compose.js'
+import type { Row } from '../db/adapter.js'
 
 export type ScenarioRunResult = {
   scenarioId: string
@@ -32,6 +33,8 @@ export type ScenarioExecDeps = {
   scriptDir?: string
   /** values to mask out of detail/logs */
   secrets?: string[]
+  /** Run a read-only query against a named connection (for db: captures). */
+  dbQuery?: (connection: string, sql: string) => Promise<Row[]>
   /** max ms for wait/submit polling (default 8000) */
   navTimeoutMs?: number
   sleep?: (ms: number) => Promise<void>
@@ -164,7 +167,7 @@ export async function executeSteps(
         }
         case 'capture': {
           if (!step.var) return fail(i, 'capture step requires `var`')
-          const val = await readCapture(page, stepTarget)
+          const val = await captureValue(page, stepTarget, deps)
           if (val === null) return fail(i, `capture target not found: ${step.target}`)
           if (deps.vars) deps.vars[step.var] = val
           break
@@ -179,6 +182,36 @@ export async function executeSteps(
 
   logger.info({ finalUrl: page.url() }, 'steps passed')
   return { ok: true, detail: `passed (${steps.length} steps)`, finalUrl: page.url() }
+}
+
+/**
+ * Resolve a capture target by scheme:
+ *  - `url:<regex?>`    → current URL (regex group 1, or whole match, or the whole URL)
+ *  - `db:<conn>:<sql>` → first cell of the first row (sql already has {{VAR}} resolved)
+ *  - otherwise          → DOM (input value → textContent)
+ */
+async function captureValue(page: PageLike, target: string, deps: ScenarioExecDeps): Promise<string | null> {
+  if (target.startsWith('url:')) {
+    const pat = target.slice(4)
+    const url = page.url()
+    if (!pat) return url
+    const m = url.match(new RegExp(pat))
+    return m ? (m[1] ?? m[0]) : null
+  }
+  if (target.startsWith('db:')) {
+    const rest = target.slice(3)
+    const sep = rest.indexOf(':')
+    if (sep < 0) throw new Error('db: capture must be db:<connection>:<sql>')
+    const connection = rest.slice(0, sep)
+    const sql = rest.slice(sep + 1)
+    if (!deps.dbQuery) throw new Error('db: capture requires a configured database connection')
+    const rows = await deps.dbQuery(connection, sql)
+    const first = rows[0]
+    if (!first) return null
+    const v = Object.values(first)[0]
+    return v === null || v === undefined ? null : String(v)
+  }
+  return readCapture(page, target)
 }
 
 /** Read a capture target: input value first, then trimmed textContent; null if absent/empty. */

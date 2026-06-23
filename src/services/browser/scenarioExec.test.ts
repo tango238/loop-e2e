@@ -228,3 +228,54 @@ describe('executeSteps capture + {{VAR}}', () => {
     expect(r.detail).not.toContain('SECRET-CODE')
   })
 })
+
+describe('executeSteps capture sources (url: / db:)', () => {
+  it('captures from the current URL with a regex group', async () => {
+    const page = fakeCapturePage({ urlRef: { u: 'https://app.test/coupon/42' } })
+    const vars: Record<string, string> = {}
+    const r = await executeSteps(page, capTarget, [
+      { action: 'capture', target: 'url:/coupon/(\\d+)', var: 'ID', expectedOutcome: 'id' },
+    ], { vars })
+    expect(r.ok).toBe(true)
+    expect(vars.ID).toBe('42')
+  })
+
+  it('captures the whole URL when no regex is given', async () => {
+    const page = fakeCapturePage({ urlRef: { u: 'https://app.test/x' } })
+    const vars: Record<string, string> = {}
+    await executeSteps(page, capTarget, [{ action: 'capture', target: 'url:', var: 'U', expectedOutcome: 'u' }], { vars })
+    expect(vars.U).toBe('https://app.test/x')
+  })
+
+  it('fails a url capture when the regex does not match', async () => {
+    const page = fakeCapturePage({ urlRef: { u: 'https://app.test/none' } })
+    const r = await executeSteps(page, capTarget, [{ action: 'capture', target: 'url:/coupon/(\\d+)', var: 'ID', expectedOutcome: 'id' }], { vars: {} })
+    expect(r.ok).toBe(false)
+  })
+
+  it('captures the first cell from a db: query with {{VAR}} resolved in the SQL', async () => {
+    const page = fakeCapturePage()
+    let seenSql = ''
+    const dbQuery = vi.fn(async (_c: string, sql: string) => { seenSql = sql; return [{ id: 7 }] })
+    const vars: Record<string, string> = { CODE: 'SUMMER25' }
+    const r = await executeSteps(page, capTarget, [
+      { action: 'capture', target: 'db:main:SELECT id FROM coupons WHERE code={{CODE}} LIMIT 1', var: 'CID', expectedOutcome: 'cid' },
+    ], { vars, dbQuery })
+    expect(r.ok).toBe(true)
+    expect(vars.CID).toBe('7')
+    expect(seenSql).toContain('SUMMER25')
+    expect(dbQuery).toHaveBeenCalledWith('main', expect.stringContaining('SELECT id'))
+  })
+
+  it('fails a db: capture when no dbQuery is configured', async () => {
+    const page = fakeCapturePage()
+    const r = await executeSteps(page, capTarget, [{ action: 'capture', target: 'db:main:SELECT 1', var: 'X', expectedOutcome: 'x' }], { vars: {} })
+    expect(r.ok).toBe(false)
+  })
+
+  it('fails a db: capture when the query returns no rows', async () => {
+    const page = fakeCapturePage()
+    const r = await executeSteps(page, capTarget, [{ action: 'capture', target: 'db:main:SELECT id', var: 'X', expectedOutcome: 'x' }], { vars: {}, dbQuery: async () => [] })
+    expect(r.ok).toBe(false)
+  })
+})
