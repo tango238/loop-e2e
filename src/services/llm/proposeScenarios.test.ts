@@ -1,99 +1,86 @@
 import { describe, it, expect, vi } from 'vitest'
-import { proposeScenarios } from './proposeScenarios.js'
+import { proposeScenarios, summarizeRequirements } from './proposeScenarios.js'
 import type { Llm } from './client.js'
 import type { RawPage, PageInfo } from '../../domain/types.js'
 import type { Scenario } from '../../scenario/schema.js'
+import type { RequirementContext } from '../repo/reader.js'
 
 const rawPage = (url: string): RawPage => ({ url, title: 't', html: '', meta: {}, screenshotPath: '' })
-
 const pageInfo = (url: string): PageInfo => ({
   url, title: 'Hotel list', description: 'list of hotels',
   displayItems: [{ type: 'table', label: 'hotels' }],
   inputItems: [], expectations: ['shows hotels'], capabilities: ['view hotels'],
 })
-
-const validScenario = (id: string): Scenario => ({
-  id,
-  title: 'Hotel list view',
-  businessFlow: 'Logged-in admin views the hotel list',
-  steps: [
-    { action: 'navigate', target: '/hotel', expectedOutcome: 'hotel list shown' },
-    { action: 'assert', target: 'table', expectedOutcome: 'rows visible' },
-  ],
-  expectedResults: [{ kind: 'ui', description: 'list shown', assertion: 'table has rows' }],
-  expectedDbState: [],
+const scn = (id: string): Scenario => ({
+  id, title: 'T', businessFlow: 'f',
+  steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }],
+  expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+})
+const req = (name: string): RequirementContext => ({
+  repo: { name, label: name, url: `https://github.com/o/${name}`, role: 'frontend', audience: 'user' },
+  readme: 'README body', docs: [], codeSummary: 'function buy(){}', gitlogSummary: 'abc feat: buy',
 })
 
-function makeLlm(returned: Scenario[]): Llm {
-  return { complete: vi.fn(async () => returned) } as unknown as Llm
-}
+describe('summarizeRequirements', () => {
+  it('returns a bounded summary including repo names', () => {
+    const s = summarizeRequirements([req('web')], 2000)
+    expect(s).toContain('web')
+    expect(s.length).toBeLessThanOrEqual(2000)
+  })
+  it('returns empty string for no requirements', () => {
+    expect(summarizeRequirements([])).toBe('')
+  })
+})
 
 describe('proposeScenarios', () => {
-  it('extracts page info per uncovered page and returns proposed scenarios', async () => {
-    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
-    const llm = makeLlm([validScenario('hotel-list')])
-    const result = await proposeScenarios(llm, [rawPage('http://x/hotel'), rawPage('http://x/booking')], { extractPageInfo })
-    expect(extractPageInfo).toHaveBeenCalledTimes(2)
-    expect(result.length).toBe(1)
-  })
-
-  it('normalizes ids to be grow-prefixed', async () => {
-    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
-    const llm = makeLlm([validScenario('hotel-list')])
-    const result = await proposeScenarios(llm, [rawPage('http://x/hotel')], { extractPageInfo })
-    expect(result[0].id).toMatch(/^grow-/)
-  })
-
-  it('keeps an already grow-prefixed id and dedups collisions', async () => {
-    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
-    const llm = makeLlm([validScenario('grow-hotel'), validScenario('grow-hotel')])
-    const result = await proposeScenarios(llm, [rawPage('http://x/hotel')], { extractPageInfo })
-    expect(result.map((s) => s.id)).toEqual(['grow-hotel', 'grow-hotel-2'])
-  })
-
-  it('strips path separators from an unsafe LLM id (no traversal)', async () => {
-    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
-    const llm = makeLlm([validScenario('grow-../../x')])
-    const result = await proposeScenarios(llm, [rawPage('http://x/hotel')], { extractPageInfo })
-    expect(result[0].id).toMatch(/^grow-[A-Za-z0-9_-]+$/)
-    expect(result[0].id).not.toContain('/')
-    expect(result[0].id).not.toContain('.')
-  })
-
-  it('returns empty array for no uncovered pages without calling the llm', async () => {
-    const extractPageInfo = vi.fn()
-    const llm = makeLlm([])
-    const result = await proposeScenarios(llm, [], { extractPageInfo })
+  it('returns [] when neither uncovered pages nor requirements are given', async () => {
+    const llm = { complete: vi.fn() } as unknown as Llm
+    const result = await proposeScenarios(llm, { uncovered: [], requirements: [] })
     expect(result).toEqual([])
-    expect(extractPageInfo).not.toHaveBeenCalled()
     expect(llm.complete).not.toHaveBeenCalled()
   })
 
-  it('proposes in batches (bounded response) and isolates a failing batch', async () => {
-    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => pageInfo(raw.url))
-    let call = 0
-    const llm = {
-      complete: vi.fn(async () => {
-        call += 1
-        if (call === 2) throw new Error('LLM structured output failed: truncated JSON')
-        return [validScenario(`s${call}`)]
-      }),
-    } as unknown as Llm
-    const pages = Array.from({ length: 12 }, (_, i) => rawPage(`http://x/p${i}`))
-    const result = await proposeScenarios(llm, pages, { extractPageInfo, batchSize: 5 })
-    expect(extractPageInfo).toHaveBeenCalledTimes(12)
-    expect(llm.complete).toHaveBeenCalledTimes(3) // ceil(12/5) batches
-    expect(result.length).toBe(2) // batch 2 threw → scenarios from batches 1 and 3 only
+  it('proposes from uncovered pages only (crawl), grow-prefixing ids', async () => {
+    const extractPageInfo = vi.fn(async (_l: Llm, r: RawPage) => pageInfo(r.url))
+    const llm = { complete: vi.fn(async () => [scn('hotel')]) } as unknown as Llm
+    const result = await proposeScenarios(llm, { uncovered: [rawPage('http://x/hotel')], requirements: [] }, { extractPageInfo })
+    expect(extractPageInfo).toHaveBeenCalledTimes(1)
+    expect(result[0].id).toMatch(/^grow-/)
   })
 
-  it('skips a page whose extraction fails without aborting', async () => {
-    const extractPageInfo = vi.fn(async (_llm: Llm, raw: RawPage) => {
-      if (raw.url.endsWith('/bad')) throw new Error('extract boom')
-      return pageInfo(raw.url)
-    })
-    const llm = makeLlm([validScenario('ok')])
-    const result = await proposeScenarios(llm, [rawPage('http://x/good'), rawPage('http://x/bad')], { extractPageInfo })
-    expect(extractPageInfo).toHaveBeenCalledTimes(2)
-    expect(result.length).toBe(1) // 1 page survived → 1 batch → proposal returned
+  it('proposes from requirements only (source) via generateScenarios', async () => {
+    const generateScenarios = vi.fn(async () => [scn('buy-flow')])
+    const llm = { complete: vi.fn() } as unknown as Llm
+    const result = await proposeScenarios(llm, { uncovered: [], requirements: [req('web')] }, { generateScenarios })
+    expect(generateScenarios).toHaveBeenCalledOnce()
+    expect(llm.complete).not.toHaveBeenCalled() // page path not taken
+    expect(result[0].id).toMatch(/^grow-/)
+  })
+
+  it('fuses both: page proposals carry the source summary, plus source-derived flows; ids deduped', async () => {
+    const extractPageInfo = vi.fn(async (_l: Llm, r: RawPage) => pageInfo(r.url))
+    let pagePrompt = ''
+    const llm = { complete: vi.fn(async (_role: string, prompt: string) => { pagePrompt = prompt; return [scn('grow-hotel')] }) } as unknown as Llm
+    const generateScenarios = vi.fn(async () => [scn('grow-hotel')]) // same id → dedup
+    const result = await proposeScenarios(
+      llm,
+      { uncovered: [rawPage('http://x/hotel')], requirements: [req('web')] },
+      { extractPageInfo, generateScenarios },
+    )
+    expect(pagePrompt).toContain('web') // source summary fused into the page prompt
+    expect(generateScenarios).toHaveBeenCalledOnce()
+    expect(result.map((s) => s.id)).toEqual(['grow-hotel', 'grow-hotel-2']) // combined + deduped
+  })
+
+  it('isolates a failing page batch but still returns source-derived scenarios', async () => {
+    const extractPageInfo = vi.fn(async (_l: Llm, r: RawPage) => pageInfo(r.url))
+    const llm = { complete: vi.fn(async () => { throw new Error('truncated') }) } as unknown as Llm
+    const generateScenarios = vi.fn(async () => [scn('src')])
+    const result = await proposeScenarios(
+      llm,
+      { uncovered: [rawPage('http://x/a')], requirements: [req('web')] },
+      { extractPageInfo, generateScenarios },
+    )
+    expect(result.map((s) => s.id)).toEqual(['grow-src'])
   })
 })
