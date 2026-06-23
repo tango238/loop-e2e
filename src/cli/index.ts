@@ -93,7 +93,8 @@ program
   .description('Generate E2E test scenarios from repository requirements using AI')
   .option('--from <paths...>', 'Additional requirement files to merge into context')
   .action(async (opts: { from?: string[] }) => {
-    await runScenario(process.cwd(), { from: opts.from })
+    const { appendActivity } = await import('../state/findings.js')
+    await runScenario(process.cwd(), { from: opts.from }, { appendActivity })
   })
 
 program
@@ -102,7 +103,8 @@ program
   .option('--target <name>', 'Target name to run against')
   .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
   .option('--skip-scenarios', 'Skip executing adopted scenarios (only collect/diff/verify)')
-  .action(async (opts: { target?: string; skipPrepare?: boolean; skipScenarios?: boolean }) => {
+  .option('--no-report', 'Write findings to the store only; aggregate later with `loop-e2e report`')
+  .action(async (opts: { target?: string; skipPrepare?: boolean; skipScenarios?: boolean; report?: boolean }) => {
     const cwd = process.cwd()
 
     let config: import('../config/schema.js').Config
@@ -156,18 +158,11 @@ program
     const { collect } = await import('../pipeline/collect.js')
     const { detectDiffs } = await import('../pipeline/diff.js')
     const { runVerify } = await import('../pipeline/verify/index.js')
-    const { writeReport } = await import('../pipeline/report.js')
     const { prepare } = await import('../pipeline/prepare.js')
-    const { adjudicate } = await import('../services/llm/refute.js')
-    const { upsertIssue } = await import('../services/github/issues.js')
-    const { parseRepoUrl } = await import('../services/github/labels.js')
     const { executeLoginScenario, authenticate } = await import('../services/browser/login.js')
     const { executeScenarios } = await import('../pipeline/executeScenarios.js')
+    const { writeFindings, appendActivity } = await import('../state/findings.js')
     const storeModule = await import('../state/store.js')
-
-    const githubClient = secrets.githubToken ? createGithubClient(secrets.githubToken) : null
-    const repoUrl = config.repositories[0]?.url
-    const repo = (githubClient && repoUrl) ? parseRepoUrl(repoUrl) : null
 
     const allSecrets: string[] = [
       secrets.anthropicApiKey,
@@ -177,6 +172,7 @@ program
     ].filter(Boolean) as string[]
 
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
+    let runResult: { findingsWritten: boolean } = { findingsWritten: false }
     try {
       browserCtx = await launchBrowser()
       const launchedBrowser = browserCtx.browser
@@ -202,7 +198,7 @@ program
         return page
       }
 
-      await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
+      runResult = await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
         ctx: runContext,
         prepare,
         collect: (ctx, _deps) => collect(ctx, {
@@ -215,14 +211,11 @@ program
         }),
         detectDiffs,
         runVerify,
-        writeReport,
         llm,
         scenarios,
-        adjudicate,
-        upsertIssue: (client, r, finding, label) => upsertIssue(client, r, finding, label, allSecrets),
-        store: { saveBaseline: (root, structure) => storeModule.saveBaseline(root, structure) },
-        githubClient,
-        repo,
+        writeFindings,
+        appendActivity,
+        saveBaseline: (root, structure) => storeModule.saveBaseline(root, structure),
         executeLogin: executeLoginScenario,
         loginDeps: {
           pinRunner: defaultComposeRunner,
@@ -251,6 +244,27 @@ program
       if (browserCtx) {
         await browserCtx.browser.close().catch(() => {})
       }
+    }
+
+    // Aggregate into a report unless --no-report (then run `loop-e2e report` later).
+    if (opts.report === false) {
+      if (!runResult.findingsWritten) {
+        process.stderr.write('run: FAILED to write findings to the store — nothing to aggregate later.\n')
+        process.exit(1)
+      }
+      process.stdout.write('run: findings written to the store. Aggregate later with `loop-e2e report`.\n')
+    } else {
+      const { runReport } = await import('./commands/report.js')
+      const { renderReport } = await import('../pipeline/report.js')
+      const { readPendingFindings, readPendingActivity, archiveConsumed } = await import('../state/findings.js')
+      const r = await runReport(cwd, { target: opts.target }, {
+        loadConfig, readPendingFindings, readPendingActivity, archiveConsumed, renderReport, createLlm, createGithubClient,
+      })
+      process.stdout.write(
+        r.wrote
+          ? `run: report written → .loop-e2e/reports/${r.reportRunId}/ (findings ${r.findings}, sources: ${r.sources.join(', ') || '—'})\n`
+          : 'run: complete (no findings to report)\n',
+      )
     }
   })
 
@@ -317,6 +331,7 @@ program
     const { proposeScenarios } = await import('../services/llm/proposeScenarios.js')
     const { loadScenarios, saveProposedScenario } = await import('../scenario/schema.js')
     const { prepare } = await import('../pipeline/prepare.js')
+    const { appendActivity } = await import('../state/findings.js')
 
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
     try {
@@ -336,6 +351,7 @@ program
           saveProposedScenario,
           llm,
           pinRunner: defaultComposeRunner,
+          appendActivity,
         },
       )
       process.stdout.write(
@@ -404,7 +420,8 @@ program
   .option('--screen <path...>', 'Screen path(s) to explore (repeatable)')
   .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
   .option('--no-reseed', 'Do not re-seed the database after the run (skips the dev-guard)')
-  .action(async (opts: { target?: string; screen?: string[]; skipPrepare?: boolean; reseed?: boolean }) => {
+  .option('--no-report', 'Write findings to the store only; aggregate later with `loop-e2e report`')
+  .action(async (opts: { target?: string; screen?: string[]; skipPrepare?: boolean; reseed?: boolean; report?: boolean }) => {
     const cwd = process.cwd()
     const { runExplore } = await import('./commands/explore.js')
     const { explore } = await import('../pipeline/explore.js')
@@ -428,10 +445,54 @@ program
       process.stdout.write(
         `explore: forms ${result.forms} / cases ${result.cases} / ` +
           `gaps ${result.gapsHigh + result.gapsMedium} (high ${result.gapsHigh}/medium ${result.gapsMedium}) / ` +
-          `message-issues ${result.messageIssues} → report .loop-e2e/reports/\n`,
+          `message-issues ${result.messageIssues}\n`,
       )
+      // Aggregate into a report unless --no-report (then run `loop-e2e report` later).
+      if (opts.report === false) {
+        process.stdout.write('explore: findings written to the store. Aggregate later with `loop-e2e report`.\n')
+      } else {
+        const { runReport } = await import('./commands/report.js')
+        const { renderReport } = await import('../pipeline/report.js')
+        const { readPendingFindings, readPendingActivity, archiveConsumed } = await import('../state/findings.js')
+        const r = await runReport(cwd, { target: opts.target }, {
+          loadConfig, readPendingFindings, readPendingActivity, archiveConsumed, renderReport, createLlm, createGithubClient,
+        })
+        if (r.wrote) process.stdout.write(`explore: report written → .loop-e2e/reports/${r.reportRunId}/\n`)
+      }
     } catch (err) {
       process.stderr.write(`explore failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('report')
+  .description('Aggregate pending findings (from run/explore) + activity into a single report + GitHub issues')
+  .option('--target <name>', 'Target name (for masking/labels; defaults to first target)')
+  .action(async (opts: { target?: string }) => {
+    const cwd = process.cwd()
+    const { runReport } = await import('./commands/report.js')
+    const { renderReport } = await import('../pipeline/report.js')
+    const { readPendingFindings, readPendingActivity, archiveConsumed } = await import('../state/findings.js')
+    try {
+      const r = await runReport(cwd, { target: opts.target }, {
+        loadConfig,
+        readPendingFindings,
+        readPendingActivity,
+        archiveConsumed,
+        renderReport,
+        createLlm,
+        createGithubClient,
+      })
+      if (!r.wrote) {
+        process.stdout.write('report: nothing pending to report\n')
+      } else {
+        process.stdout.write(
+          `report: findings ${r.findings} / sources: ${r.sources.join(', ') || '(activity only)'} → .loop-e2e/reports/${r.reportRunId}/\n`,
+        )
+      }
+    } catch (err) {
+      process.stderr.write(`report failed: ${err instanceof Error ? err.message : String(err)}\n`)
       process.exit(1)
     }
   })

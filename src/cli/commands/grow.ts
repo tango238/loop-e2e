@@ -10,6 +10,10 @@ export type RunGrowDeps = GrowDeps & {
   /** Injectable for tests */
   loadConfig?: typeof defaultLoadConfig
   grow?: typeof defaultGrow
+  /** Record an activity line for the aggregated report (injected; omitted in tests = no-op). */
+  appendActivity?: (root: string, entry: import('../../state/findings.js').ActivityEntry) => Promise<void>
+  /** Injected for deterministic activity runId in tests */
+  clock?: () => string
 }
 
 /**
@@ -47,10 +51,20 @@ export async function runGrow(root: string, opts: RunGrowOpts, deps: RunGrowDeps
     ...Object.values(secrets.targetAuth),
   ].filter(Boolean)
 
-  return growFn(
+  const startedAt = new Date().toISOString()
+  const result = await growFn(
     { config: growConfig, root, scenarioDir, target: envTarget, creds, skipPrepare: opts.skipPrepare },
     { ...deps, secrets: allSecrets, gitToken: secrets.githubToken },
   )
+
+  // Record activity for the aggregated `report` (grow produces scenarios, not findings).
+  const runId = deps.clock ? deps.clock() : new Date().toISOString().replace(/[:.]/g, '-')
+  await deps.appendActivity?.(root, {
+    source: 'grow', runId, startedAt,
+    summary: `proposed ${result.proposed.length} scenarios (discovered ${result.discovered}, uncovered ${result.uncovered})`,
+  })
+
+  return result
 }
 
 function selectTarget(config: Config, name?: string): Config['targets'][number] {

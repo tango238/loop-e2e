@@ -1,7 +1,6 @@
 import { logger } from '../../util/logger.js'
 import type { RunContext, DiffFinding, VerifyFinding, SiteStructure, PriorState, RawPage, TargetEnv } from '../../domain/types.js'
 import type { CollectResult } from '../../pipeline/collect.js'
-import type { WriteReportDeps } from '../../pipeline/report.js'
 import type { RunVerifyDeps } from '../../pipeline/verify/index.js'
 import type { Scenario, LoadedScenario } from '../../scenario/schema.js'
 import { isLoginScenario, findLoginScenario } from '../../scenario/loginScenario.js'
@@ -25,7 +24,6 @@ type DetectDiffsFn = (deps: {
   llm: import('../../services/llm/client.js').Llm
 }) => Promise<DiffFinding[]>
 type RunVerifyFn = (deps: RunVerifyDeps) => Promise<VerifyFinding[]>
-type WriteReportFn = (root: string, runId: string, deps: WriteReportDeps) => Promise<void>
 
 /** Injectable login executor for testing */
 type ExecuteLoginFn = (
@@ -43,7 +41,12 @@ export type RunDeps = {
   collect: CollectFn
   detectDiffs: DetectDiffsFn
   runVerify: RunVerifyFn
-  writeReport: WriteReportFn
+  /** Persist findings to the shared store (consumed by the `report` command) */
+  writeFindings?: (root: string, entry: import('../../state/findings.js').FindingsEntry) => Promise<void>
+  /** Append a one-line activity record (shown in the aggregated report) */
+  appendActivity?: (root: string, entry: import('../../state/findings.js').ActivityEntry) => Promise<void>
+  /** Save the crawl baseline (run owns this — moved out of the report step) */
+  saveBaseline?: (root: string, structure: SiteStructure) => Promise<void>
   /** Injectable prepare phase — production passes real prepare; tests inject a mock */
   prepare?: typeof prepare
   /** Injected for deterministic runId in tests; defaults to ISO timestamp */
@@ -58,16 +61,6 @@ export type RunDeps = {
   scenarios?: Scenario[]
   /** Injectable DB driver factories for verify tests */
   dbDrivers?: DbDriverOptions
-  /** Real adjudicate fn — production passes adjudicate from refute.ts */
-  adjudicate?: WriteReportDeps['adjudicate']
-  /** Real upsertIssue fn — production passes upsertIssue from issues.ts */
-  upsertIssue?: WriteReportDeps['upsertIssue']
-  /** Real store with saveBaseline — production passes from store.ts */
-  store?: WriteReportDeps['store']
-  /** GitHub client — null means no issue filing */
-  githubClient?: import('../../services/github/client.js').GithubClient | null
-  /** GitHub repo ref — null means no issue filing */
-  repo?: import('../../services/github/labels.js').RepoRef | null
   /** Injectable login executor — production passes executeLoginScenario */
   executeLogin?: ExecuteLoginFn
   /** Deps forwarded to executeLogin (pinRunner, secrets, getAuthResponse, …) */
@@ -258,8 +251,8 @@ function resolveCredentials(
  * opts.skipPrepare is true. Prepare failures abort the run (propagate).
  * All external dependencies are injectable for deterministic testing.
  */
-export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promise<void> {
-  const { collect, detectDiffs, runVerify, writeReport, clock, ctx: injectedCtx, llm } = deps
+export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promise<{ findingsWritten: boolean }> {
+  const { collect, detectDiffs, runVerify, clock, ctx: injectedCtx, llm } = deps
   const runId = clock ? clock() : new Date().toISOString().replace(/[:.]/g, '-')
 
   // In tests, ctx is injected. In production, it would be loaded from config.
@@ -354,30 +347,32 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
   const scenarioFindings = await runScenarioStage(runCtx, deps, opts, deps.scenarios ?? [])
   verifyFindings = [...verifyFindings, ...scenarioFindings]
 
-  // Stage 4: report (always runs)
-  // Use injected deps for adjudicate/upsertIssue/store; fall back to no-ops only in tests
-  // that don't exercise those paths. Production wiring (cli/index.ts) must always supply real deps.
+  // Stage 4: persist baseline + findings + activity. Reporting is a separate step (the `report`
+  // command), invoked automatically by the CLI unless --no-report. run is now a findings producer.
+  const startedAt = new Date().toISOString()
   try {
-    await writeReport(root, runId, {
-      ctx: runCtx,
-      diffFindings,
-      verifyFindings,
-      currentStructure: structure,
-      llm: llm as never,
-      adjudicate: deps.adjudicate ?? (async () => ({
-        classification: 'uncertain' as const,
-        confidence: 0,
-        confirmedCount: 0,
-        panelSize: 3,
-        votes: [],
-        rationale: 'no adjudicate dep provided',
-      })),
-      upsertIssue: deps.upsertIssue ?? (async () => {}),
-      store: deps.store ?? { saveBaseline: async () => {} },
-      githubClient: deps.githubClient ?? null,
-      repo: deps.repo ?? null,
-    })
+    if (deps.saveBaseline) await deps.saveBaseline(root, structure)
   } catch (error) {
-    logger.error({ error, runId }, 'report stage failed')
+    logger.error({ error, runId }, 'baseline save failed')
   }
+  // findingsWritten gates the CLI's "written to the store" reassurance under --no-report: if the
+  // store write fails there, the findings exist nowhere, so the CLI must surface a hard error.
+  let findingsWritten = !deps.writeFindings // no store dep (tests) ⇒ treat as ok
+  try {
+    if (deps.writeFindings) {
+      await deps.writeFindings(root, { source: 'run', runId, startedAt, diffFindings, verifyFindings })
+      findingsWritten = true
+    }
+  } catch (error) {
+    logger.error({ error, runId }, 'findings store write failed')
+  }
+  try {
+    if (deps.appendActivity) {
+      const summary = `findings ${diffFindings.length + verifyFindings.length} (diff ${diffFindings.length}, verify ${verifyFindings.length})`
+      await deps.appendActivity(root, { source: 'run', runId, startedAt, summary })
+    }
+  } catch (error) {
+    logger.error({ error, runId }, 'activity append failed')
+  }
+  return { findingsWritten }
 }
