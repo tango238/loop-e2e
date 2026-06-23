@@ -83,15 +83,19 @@ async function runMultiAct(
   const ensureUnauth = deps.ensureUnauthenticated ?? defaultEnsureUnauth
   const env = deps.secretsEnv ?? process.env
   const personas = new Map((scenario.personas ?? []).map((p) => [p.name, p]))
-  const vars: Record<string, string> = {}
+  // Seed from the inherited bag (env credentials like {{TARGET_USER}} live in deps.vars) so
+  // multi-act scenarios resolve them too; captures then accumulate/override across acts.
+  const vars: Record<string, string> = { ...(deps.vars ?? {}) }
   const acts = scenario.acts ?? []
   let prevPersona: string | undefined
   let lastUrl = ''
+  let deferredTarget = false
 
   for (let ai = 0; ai < acts.length; ai++) {
     const act = acts[ai]
     const persona = act.persona ? personas.get(act.persona) : undefined
     if (persona?.target && persona.target !== target.name) {
+      deferredTarget = true
       logger.warn(
         { scenario: scenario.id, persona: persona.name, target: persona.target },
         'multi-act: persona.target other than the run target is deferred to Phase3 — using run target',
@@ -103,6 +107,13 @@ async function runMultiAct(
     let actSecrets = deps.secrets ?? []
     if (auth === 'authenticated') {
       const personaCreds = resolvePersonaCreds(persona, runCreds, env)
+      if (persona?.credEnv && (!personaCreds.username || !personaCreds.password)) {
+        return scenarioFinding(
+          scenario, false,
+          `${label} persona credEnv not set (check ${persona.credEnv.usernameEnv}/${persona.credEnv.passwordEnv} in .env)`,
+          lastUrl,
+        )
+      }
       actSecrets = [...(deps.secrets ?? []), personaCreds.username, personaCreds.password].filter(Boolean)
       const forceReauth = ai > 0 && persona?.name !== prevPersona
       const r = await ensureAuth(page, target, personaCreds, firstNavOf(act.steps), { ...deps, secrets: actSecrets, forceReauth })
@@ -123,7 +134,9 @@ async function runMultiAct(
   }
 
   const stepCount = acts.reduce((n, a) => n + a.steps.length, 0)
-  return scenarioFinding(scenario, true, `passed (${acts.length} acts, ${stepCount} steps)`, lastUrl)
+  let detail = `passed (${acts.length} acts, ${stepCount} steps)`
+  if (deferredTarget) detail += ' | note: a persona.target other than the run target was ignored (cross-target is Phase3)'
+  return scenarioFinding(scenario, true, detail, lastUrl)
 }
 
 /**

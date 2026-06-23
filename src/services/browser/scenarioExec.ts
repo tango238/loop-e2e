@@ -113,7 +113,9 @@ export async function executeSteps(
   const sleep = deps.sleep ?? defaultSleep
   const intervalMs = 250
   const attempts = Math.max(1, Math.ceil(navTimeoutMs / intervalMs))
-  const mask = (s: string): string => maskSecrets(s, secrets)
+  // Mask secrets AND captured values — Playwright errors can echo a resolved selector/URL that
+  // contains a captured value, so masking the bag keeps it out of `detail`.
+  const mask = (s: string): string => maskSecrets(s, [...secrets, ...Object.values(deps.vars ?? {})].filter(Boolean))
 
   const fail = (i: number, why: string): StepsResult => ({
     ok: false,

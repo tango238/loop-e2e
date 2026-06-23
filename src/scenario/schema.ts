@@ -8,8 +8,8 @@ export const ScenarioStepSchema = z.object({
   action: z.string().min(1),
   target: z.string().min(1),
   input: z.string().optional(),
-  /** Variable name written by a `capture` step (referenced later as {{VAR}}). */
-  var: z.string().optional(),
+  /** Variable name written by a `capture` step (referenced later as {{VAR}}); uppercase to match resolution. */
+  var: z.string().regex(/^[A-Z0-9_]+$/, 'capture var must be UPPER_SNAKE (matches {{VAR}} resolution)').optional(),
   expectedOutcome: z.string().min(1),
 })
 

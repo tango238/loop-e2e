@@ -246,3 +246,13 @@ describe('multi-act schema', () => {
     expect(allSteps(s)[0].var).toBe('CODE')
   })
 })
+
+describe('capture var naming', () => {
+  const base = {
+    id: 'm', title: 'T', businessFlow: 'f',
+    expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+  }
+  it('rejects a lowercase capture var', () => {
+    expect(() => ScenarioSchema.parse({ ...base, steps: [{ action: 'capture', target: '#c', var: 'coupon', expectedOutcome: 'o' }] })).toThrow(/UPPER_SNAKE/)
+  })
+})

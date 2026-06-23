@@ -174,3 +174,34 @@ describe('resolvePersonaCreds', () => {
     expect(resolvePersonaCreds(undefined, creds, {})).toEqual(creds)
   })
 })
+
+describe('executeScenarios multi-act fixes', () => {
+  it('seeds the vars bag from inherited deps.vars (env credentials still resolve in multi-act)', async () => {
+    let seen: Record<string, string> | undefined
+    const executeSteps = vi.fn(async (_p: unknown, _t: unknown, _s: unknown, deps: { vars?: Record<string, string> } = {}) => {
+      seen = deps.vars
+      return { ok: true, detail: 'passed', finalUrl: 'https://app.test/x' }
+    })
+    const oneAct: Scenario = {
+      id: 'one', title: 'one', businessFlow: 'f',
+      personas: [{ name: 'a', auth: 'authenticated' }],
+      acts: [{ persona: 'a', steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }] }],
+      expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+    }
+    await executeScenarios(page, target, [oneAct], creds, {
+      ensureAuthenticated: vi.fn(async () => ({ ok: true, detail: 'ok' })), executeSteps,
+      vars: { TARGET_USER: 'admin@example.com' },
+    })
+    expect(seen?.TARGET_USER).toBe('admin@example.com')
+  })
+
+  it('returns a clear finding when a persona credEnv is not set', async () => {
+    const findings = await executeScenarios(page, target, [actScn('flow')], creds, {
+      ensureAuthenticated: vi.fn(async () => ({ ok: true, detail: 'ok' })),
+      executeSteps: vi.fn(async () => ({ ok: true, detail: 'passed', finalUrl: 'u' })),
+      secretsEnv: {}, // REV_U / REV_P missing
+    })
+    expect(findings[0].severity).toBe('high')
+    expect(findings[0].detail).toMatch(/credEnv not set.*REV_U/)
+  })
+})
