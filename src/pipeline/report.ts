@@ -11,7 +11,6 @@ import type {
   VerifyFinding,
   FindingVerdict,
   Report,
-  SiteStructure,
 } from '../domain/types.js'
 import type { ActivityEntry } from '../state/findings.js'
 import type { Llm } from '../services/llm/client.js'
@@ -267,18 +266,4 @@ export async function renderReport(
   await writeFile(join(reportDir, 'report.json'), safeJson, 'utf8')
   await writeFile(join(reportDir, 'report.md'), safeMd, 'utf8')
   logger.info({ runId, reportDir }, 'Report written')
-}
-
-// --- Back-compat shim (removed once run/explore migrate to the findings store) ---
-// Old callers also expect the baseline to be saved; renderReport no longer does this.
-export type WriteReportDeps = RenderReportDeps & {
-  currentStructure: SiteStructure
-  store: { saveBaseline: (root: string, structure: SiteStructure) => Promise<void> }
-}
-
-/** @deprecated Use renderReport (+ save the baseline in the caller). Kept until run/explore migrate. */
-export async function writeReport(root: string, runId: string, deps: WriteReportDeps): Promise<void> {
-  await renderReport(root, runId, deps)
-  await deps.store.saveBaseline(root, deps.currentStructure)
-  logger.debug({ runId }, 'Baseline updated')
 }

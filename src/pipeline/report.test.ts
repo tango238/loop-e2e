@@ -5,7 +5,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import type { DiffFinding, VerifyFinding, FindingVerdict, RunContext } from '../domain/types.js'
 import type { Llm } from '../services/llm/client.js'
 import type { Config } from '../config/schema.js'
-import { writeReport, renderReport } from './report.js'
+import { renderReport } from './report.js'
 
 const defaultRefutation: Config['refutation'] = {
   panelSize: 3,
@@ -74,7 +74,7 @@ function makeCtx(root: string): RunContext {
   }
 }
 
-describe('writeReport', () => {
+describe('renderReport', () => {
   let tmpRoot: string
 
   beforeEach(async () => {
@@ -87,21 +87,18 @@ describe('writeReport', () => {
     const verdict = makeVerdict({ classification: 'bug', confidence: 0.9 })
     const adjudicateMock = vi.fn().mockResolvedValue(verdict)
     const upsertIssueMock = vi.fn().mockResolvedValue(undefined)
-    const storeMock = { saveBaseline: vi.fn().mockResolvedValue(undefined) }
     const llm = makeMockLlm()
     const ctx = makeCtx(tmpRoot)
 
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [finding],
       verifyFindings: [],
       llm,
       adjudicate: adjudicateMock,
       upsertIssue: upsertIssueMock,
-      store: storeMock,
       githubClient: {} as never,
       repo: { owner: 'acme', name: 'myapp' },
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
 
     expect(upsertIssueMock).toHaveBeenCalledOnce()
@@ -122,20 +119,17 @@ describe('writeReport', () => {
     const verdict = makeVerdict({ classification: 'bug', confidence: 0.5 })
     const adjudicateMock = vi.fn().mockResolvedValue(verdict)
     const upsertIssueMock = vi.fn().mockResolvedValue(undefined)
-    const storeMock = { saveBaseline: vi.fn().mockResolvedValue(undefined) }
     const ctx = makeCtx(tmpRoot)
 
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [finding],
       verifyFindings: [],
       llm: makeMockLlm(),
       adjudicate: adjudicateMock,
       upsertIssue: upsertIssueMock,
-      store: storeMock,
       githubClient: {} as never,
       repo: { owner: 'acme', name: 'myapp' },
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
 
     expect(upsertIssueMock).not.toHaveBeenCalled()
@@ -149,20 +143,17 @@ describe('writeReport', () => {
     const verdict = makeVerdict({ classification: 'uncertain', confidence: 0.9 })
     const adjudicateMock = vi.fn().mockResolvedValue(verdict)
     const upsertIssueMock = vi.fn().mockResolvedValue(undefined)
-    const storeMock = { saveBaseline: vi.fn().mockResolvedValue(undefined) }
     const ctx = makeCtx(tmpRoot)
 
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [finding],
       verifyFindings: [],
       llm: makeMockLlm(),
       adjudicate: adjudicateMock,
       upsertIssue: upsertIssueMock,
-      store: storeMock,
       githubClient: null,
       repo: null,
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
 
     expect(upsertIssueMock).not.toHaveBeenCalled()
@@ -180,17 +171,15 @@ describe('writeReport', () => {
     const adjudicateMock = vi.fn().mockResolvedValue(makeVerdict({ classification: 'uncertain', confidence: 0.5 }))
     const ctx = makeCtx(tmpRoot)
 
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [diffFinding],
       verifyFindings: [verifyFinding],
       llm: makeMockLlm(),
       adjudicate: adjudicateMock,
       upsertIssue: vi.fn().mockResolvedValue(undefined),
-      store: { saveBaseline: vi.fn().mockResolvedValue(undefined) },
       githubClient: null,
       repo: null,
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
 
     const md = await readFile(join(tmpRoot, '.loop-e2e', 'reports', ctx.runId, 'report.md'), 'utf8')
@@ -210,17 +199,15 @@ describe('writeReport', () => {
       evidence: 'selector=[name="age"] expectation=reject confidence=high',
     }
     const ctx = makeCtx(tmpRoot)
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [],
       verifyFindings: [finding],
       llm: makeMockLlm(),
       adjudicate: vi.fn().mockResolvedValue(makeVerdict({ classification: 'uncertain', confidence: 0.5 })),
       upsertIssue: vi.fn().mockResolvedValue(undefined),
-      store: { saveBaseline: vi.fn().mockResolvedValue(undefined) },
       githubClient: null,
       repo: null,
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
     const md = await readFile(join(tmpRoot, '.loop-e2e', 'reports', ctx.runId, 'report.md'), 'utf8')
     expect(md).toMatch(/\*\*ページ:\*\* \/user\/create/)
@@ -269,20 +256,17 @@ describe('writeReport', () => {
   it('no findings: empty input → report still written, no upsertIssue', async () => {
     const adjudicateMock = vi.fn()
     const upsertIssueMock = vi.fn()
-    const storeMock = { saveBaseline: vi.fn().mockResolvedValue(undefined) }
     const ctx = makeCtx(tmpRoot)
 
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [],
       verifyFindings: [],
       llm: makeMockLlm(),
       adjudicate: adjudicateMock,
       upsertIssue: upsertIssueMock,
-      store: storeMock,
       githubClient: null,
       repo: null,
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
 
     expect(upsertIssueMock).not.toHaveBeenCalled()
@@ -305,7 +289,6 @@ describe('writeReport', () => {
     const verdict = makeVerdict({ classification: 'bug', confidence: 0.9, rationale: `rationale with ${secretApiKey}` })
     const adjudicateMock = vi.fn().mockResolvedValue(verdict)
     const upsertIssueMock = vi.fn().mockResolvedValue(undefined)
-    const storeMock = { saveBaseline: vi.fn().mockResolvedValue(undefined) }
     const llm: Llm = {
       complete: vi.fn().mockResolvedValue(`Summary mentioning ${secretApiKey}`),
     } as unknown as Llm
@@ -320,17 +303,15 @@ describe('writeReport', () => {
       },
     }
 
-    await writeReport(tmpRoot, ctx.runId, {
+    await renderReport(tmpRoot, ctx.runId, {
       ctx,
       diffFindings: [finding],
       verifyFindings: [],
       llm,
       adjudicate: adjudicateMock,
       upsertIssue: upsertIssueMock,
-      store: storeMock,
       githubClient: {} as never,
       repo: { owner: 'acme', name: 'myapp' },
-      currentStructure: { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] },
     })
 
     const reportDir = join(tmpRoot, '.loop-e2e', 'reports', ctx.runId)

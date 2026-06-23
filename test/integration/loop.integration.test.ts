@@ -226,11 +226,11 @@ describe('integration: init → scenario → run → feedback', () => {
         verifyReceivedPages = deps.pages
         return [verifyFinding]
       }),
-      writeReport: vi.fn().mockImplementation(async (rt: string, runId: string) => {
-        const report = makeReport(runId, [verifyFinding])
+      writeFindings: vi.fn().mockImplementation(async (rt: string, entry: { runId: string }) => {
+        const report = makeReport(entry.runId, [verifyFinding])
         const paths = statePaths(rt)
-        await ensureDir(join(paths.reports, runId))
-        await writeFile(join(paths.reports, runId, 'report.json'), JSON.stringify(report), 'utf8')
+        await ensureDir(join(paths.reports, entry.runId))
+        await writeFile(join(paths.reports, entry.runId, 'report.json'), JSON.stringify(report), 'utf8')
       }),
       clock: () => 'run-four-cmd-001',
       llm,
@@ -305,12 +305,12 @@ describe('integration: init → scenario → run → feedback', () => {
         verifyReceivedPages = deps.pages
         return [verifyFinding]
       }),
-      writeReport: vi.fn().mockImplementation(async (rt: string, runId: string) => {
+      writeFindings: vi.fn().mockImplementation(async (rt: string, entry: { runId: string }) => {
         // Write a real report.json so feedback can load it
-        const report = makeReport(runId, [verifyFinding])
+        const report = makeReport(entry.runId, [verifyFinding])
         const paths = statePaths(rt)
-        await ensureDir(join(paths.reports, runId))
-        await writeFile(join(paths.reports, runId, 'report.json'), JSON.stringify(report), 'utf8')
+        await ensureDir(join(paths.reports, entry.runId))
+        await writeFile(join(paths.reports, entry.runId, 'report.json'), JSON.stringify(report), 'utf8')
       }),
       clock: () => 'run-integration-001',
       llm,
@@ -372,7 +372,7 @@ describe('integration: init → scenario → run → feedback', () => {
         capturedPages = deps.pages
         return []
       }),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-threading-test',
       llm: makeLlm(),
     })

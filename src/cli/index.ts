@@ -93,7 +93,8 @@ program
   .description('Generate E2E test scenarios from repository requirements using AI')
   .option('--from <paths...>', 'Additional requirement files to merge into context')
   .action(async (opts: { from?: string[] }) => {
-    await runScenario(process.cwd(), { from: opts.from })
+    const { appendActivity } = await import('../state/findings.js')
+    await runScenario(process.cwd(), { from: opts.from }, { appendActivity })
   })
 
 program
@@ -325,6 +326,7 @@ program
     const { proposeScenarios } = await import('../services/llm/proposeScenarios.js')
     const { loadScenarios, saveProposedScenario } = await import('../scenario/schema.js')
     const { prepare } = await import('../pipeline/prepare.js')
+    const { appendActivity } = await import('../state/findings.js')
 
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
     try {
@@ -344,6 +346,7 @@ program
           saveProposedScenario,
           llm,
           pinRunner: defaultComposeRunner,
+          appendActivity,
         },
       )
       process.stdout.write(

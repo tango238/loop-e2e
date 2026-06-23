@@ -27,6 +27,8 @@ export type ScenarioDeps = {
   ) => Promise<RequirementContext[]>
   /** Override generateScenarios for testing */
   generateScenarios?: (llm: Llm, contexts: RequirementContext[], authHint?: AuthHint) => Promise<Scenario[]>
+  /** Record an activity line for the aggregated report (injected; omitted in tests = no-op). */
+  appendActivity?: (root: string, entry: import('../../state/findings.js').ActivityEntry) => Promise<void>
 }
 
 /**
@@ -91,6 +93,13 @@ export async function runScenario(
     await saveScenario(config.scenarioDir, scenario)
     logger.info({ id: scenario.id }, 'Scenario saved')
   }
+
+  // Record activity for the aggregated `report` (scenario generates scenarios, not findings).
+  const runId = new Date().toISOString().replace(/[:.]/g, '-')
+  await deps.appendActivity?.(root, {
+    source: 'scenario', runId, startedAt: runId,
+    summary: `generated ${scenarios.length} scenarios`,
+  })
 
   logger.info('scenario command complete')
 }
