@@ -128,8 +128,37 @@ expectedDbState: []
 ```
 
 - `steps`（フラット・単一アクター）と `acts`（マルチアクター）は**排他**。`steps` の既存シナリオはそのまま動きます。
-- `capture` の取得元は **DOM のみ**（input value → textContent）。同一ターゲット上での人格切替に対応（別アプリ跨ぎは今後対応）。
-- `persona.credEnv` でアクター別の認証情報（`.env` のキー名）を指定。未指定なら run の認証情報を使います。
+- `capture` の取得元：`'<selector>'`（DOM: input value → textContent）、`'url:<regex?>'`（現在 URL のグループ1/全体）、`'db:<connection>:<sql>'`（別 DB の先頭セル。`{{VAR}}` は SQL 内でも解決。read-only 用途）。
+- `persona.credEnv` でアクター別の認証情報（`.env` のキー名）を指定。未指定なら（解決した）ターゲットの認証情報を使います。
+
+#### システム跨ぎ（複数ターゲット）
+
+`persona.target` に `config.targets` の別ターゲット名を指定すると、その段は別アプリ（別 `baseUrl`/認証）で
+実行されます。1つのブラウザで各ドメインのセッションを保持するため、admin と storefront をまたぐ
+フローを1シナリオで検証できます。**段の境界でターゲットが変わると再ログインしません**（別ドメインで
+独立セッション）。同一ターゲット上で人格だけ変わる場合のみ再ログインします。
+
+```yaml
+personas:
+  - { name: admin,   target: admin,      auth: authenticated }
+  - { name: shopper, target: storefront, auth: authenticated, credEnv: { usernameEnv: SHOP_USER, passwordEnv: SHOP_PASS } }
+acts:
+  - persona: admin
+    steps:
+      - { action: navigate, target: /coupon/create, expectedOutcome: 作成フォーム }
+      - { action: submit, target: 'button[type=submit]', expectedOutcome: 作成 }
+      - { action: capture, target: 'url:/coupon/(\d+)', var: COUPON_ID, expectedOutcome: 採番ID }
+      - { action: capture, target: 'db:main:SELECT code FROM coupons WHERE id={{COUPON_ID}} LIMIT 1', var: CODE, expectedOutcome: コード }
+  - persona: shopper
+    steps:
+      - { action: navigate, target: /checkout, expectedOutcome: 購入画面 }
+      - { action: fill, target: '[name=coupon]', input: '{{CODE}}', expectedOutcome: 適用 }
+      - { action: assert, target: 'text=割引', expectedOutcome: 反映 }
+expectedDbState:
+  - { connection: storefront-db, table: orders, match: { coupon_code: '{{CODE}}' }, expectedValues: { status: paid } }
+```
+
+- 跨ぎ `expectedDbState` は対象 DB を `config.databases` に追加すれば既存の検証ステージが照合します。
 
 **Writing reliable scenarios:**
 
