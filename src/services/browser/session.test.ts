@@ -72,3 +72,25 @@ describe('ensureUnauthenticated', () => {
     await expect(ensureUnauthenticated(page, target, {})).resolves.toBeUndefined()
   })
 })
+
+describe('ensureAuthenticated forceReauth', () => {
+  it('clears the session and re-authenticates even if a session exists', async () => {
+    const authenticate = vi.fn(async () => ({ ok: true, detail: 'logged in', finalUrl: 'https://app.test/' }))
+    let cleared = false
+    const page = {
+      goto: async () => {},
+      url: () => (cleared ? 'https://app.test/login' : 'https://app.test/'),
+      waitForLoadState: async () => {},
+    } as unknown as PageLike
+    const clearCookies = vi.fn(async () => { cleared = true })
+    const r = await ensureAuthenticated(
+      page,
+      { name: 'a', baseUrl: 'https://app.test', auth: { strategy: 'form', loginPath: '/login' } } as TargetEnv,
+      { username: 'u', password: 'p' }, '/',
+      { forceReauth: true, clearCookies, authenticate },
+    )
+    expect(clearCookies).toHaveBeenCalledOnce()
+    expect(authenticate).toHaveBeenCalledOnce()
+    expect(r.ok).toBe(true)
+  })
+})

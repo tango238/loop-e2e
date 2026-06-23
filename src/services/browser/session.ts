@@ -11,6 +11,8 @@ export type SessionDeps = LoginDeps & {
     deps?: LoginDeps,
   ) => Promise<LoginResult>
   clearCookies?: (page: PageLike) => Promise<void>
+  /** Drop the current session before probing so a different identity re-logs in. */
+  forceReauth?: boolean
 }
 
 function urlIsLoginPath(url: string, loginPath: string): boolean {
@@ -37,6 +39,10 @@ export async function ensureAuthenticated(
   const loginPath = target.auth?.loginPath ?? '/login'
   const base = target.baseUrl.replace(/\/$/, '')
   const probe = /^https?:\/\//i.test(probePath) ? probePath : `${base}/${probePath.replace(/^\//, '')}`
+
+  if (deps.forceReauth && deps.clearCookies) {
+    await deps.clearCookies(page) // drop current identity so the probe redirects to login
+  }
 
   await page.goto(probe, { waitUntil: 'domcontentloaded', timeout: 30_000 })
   await page.waitForLoadState('networkidle')
