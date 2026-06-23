@@ -306,23 +306,24 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
       } satisfies CollectResult),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([] as VerifyFinding[]),
-      writeReport: vi.fn().mockImplementation(async (r: string, id: string, d: { verifyFindings: VerifyFinding[] }) => {
+      writeFindings: vi.fn().mockImplementation(async (r: string, entry: { runId: string; verifyFindings: VerifyFinding[] }) => {
         // Capture findings produced by runRun (including the login finding wired from executeLogin)
-        capturedVerifyFindings = d.verifyFindings
+        capturedVerifyFindings = entry.verifyFindings
 
-        // Write a real report.json so the artifact assertion below still holds
+        // Write a real report.json so the artifact assertion below still holds (run now produces
+        // findings; the report would be written by the separate `report` step — emulated here).
         const report: Report = {
-          runId: id,
+          runId: entry.runId,
           startedAt: new Date().toISOString(),
           target: 'app',
           diffFindings: [],
-          verifyFindings: d.verifyFindings,
+          verifyFindings: entry.verifyFindings,
           verdicts: {},
-          siteStructureRef: `runs/${id}.yaml`,
+          siteStructureRef: `runs/${entry.runId}.yaml`,
           summary: '## Summary\n\nLogin succeeded.\n',
         }
-        await ensureDir(join(paths.reports, id))
-        await writeFile(join(paths.reports, id, 'report.json'), JSON.stringify(report, null, 2), 'utf8')
+        await ensureDir(join(paths.reports, entry.runId))
+        await writeFile(join(paths.reports, entry.runId, 'report.json'), JSON.stringify(report, null, 2), 'utf8')
       }),
       clock: () => runId,
       scenarios: [loginScenario],
@@ -480,8 +481,8 @@ describe('integration: init(launch) → scenario → run(login) → down', () =>
       } satisfies CollectResult),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
-        capturedVerifyFindings = d.verifyFindings
+      writeFindings: vi.fn().mockImplementation(async (_r: string, entry: { verifyFindings: VerifyFinding[] }) => {
+        capturedVerifyFindings = entry.verifyFindings
       }),
       clock: () => 'run-no-login-deps',
       scenarios: [loginScenario],

@@ -34,7 +34,7 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
       detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
       runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
-      writeReport: vi.fn().mockImplementation(async () => { order.push('report') }),
+      writeFindings: vi.fn().mockImplementation(async () => { order.push('report') }),
       clock: () => 'run-2024-01-01',
     }
 
@@ -44,7 +44,7 @@ describe('runRun', () => {
     expect(deps.collect).toHaveBeenCalledOnce()
     expect(deps.detectDiffs).toHaveBeenCalledOnce()
     expect(deps.runVerify).toHaveBeenCalledOnce()
-    expect(deps.writeReport).toHaveBeenCalledOnce()
+    expect(deps.writeFindings).toHaveBeenCalledOnce()
   })
 
   it('uses injected clock for deterministic runId', async () => {
@@ -54,7 +54,7 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async (ctx: { runId: string }) => { capturedRunIds.push(ctx.runId); return makeCollectResult() }),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'test-run-fixed',
     }
 
@@ -69,8 +69,8 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([sampleFinding]),
       runVerify: vi.fn().mockResolvedValue([sampleVerifyFinding]),
-      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, reportDeps: { verifyFindings: unknown }) => {
-        capturedVerifyFindings = reportDeps.verifyFindings
+      writeFindings: vi.fn().mockImplementation(async (_root: string, entry: { verifyFindings: unknown }) => {
+        capturedVerifyFindings = entry.verifyFindings
       }),
       clock: () => 'run-wired',
     }
@@ -86,7 +86,7 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async () => { order.push('collect-fail'); throw new Error('crawl error') }),
       detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
       runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
-      writeReport: vi.fn().mockImplementation(async () => { order.push('report') }),
+      writeFindings: vi.fn().mockImplementation(async () => { order.push('report') }),
       clock: () => 'run-partial',
     }
 
@@ -95,7 +95,7 @@ describe('runRun', () => {
     expect(order).toEqual(['collect-fail', 'diff', 'verify', 'report'])
     expect(deps.detectDiffs).toHaveBeenCalledOnce()
     expect(deps.runVerify).toHaveBeenCalledOnce()
-    expect(deps.writeReport).toHaveBeenCalledOnce()
+    expect(deps.writeFindings).toHaveBeenCalledOnce()
   })
 
   it('if diff fails, verify and report still run with empty diffFindings', async () => {
@@ -106,9 +106,9 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
       detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff-fail'); throw new Error('diff error') }),
       runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
-      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, reportDeps: { diffFindings: unknown }) => {
+      writeFindings: vi.fn().mockImplementation(async (_root: string, entry: { diffFindings: unknown }) => {
         order.push('report')
-        capturedDiffFindings = reportDeps.diffFindings
+        capturedDiffFindings = entry.diffFindings
       }),
       clock: () => 'run-partial-diff',
     }
@@ -127,9 +127,9 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
       detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
       runVerify: vi.fn().mockImplementation(async () => { order.push('verify-fail'); throw new Error('verify error') }),
-      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, reportDeps: { verifyFindings: unknown }) => {
+      writeFindings: vi.fn().mockImplementation(async (_root: string, entry: { verifyFindings: unknown }) => {
         order.push('report')
-        capturedVerifyFindings = reportDeps.verifyFindings
+        capturedVerifyFindings = entry.verifyFindings
       }),
       clock: () => 'run-partial-verify',
     }
@@ -158,7 +158,7 @@ describe('runRun', () => {
         return []
       }),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-scenarios-threaded',
       scenarios: [scenario],
     }
@@ -167,49 +167,37 @@ describe('runRun', () => {
     expect(capturedScenarios).toEqual([scenario])
   })
 
-  it('passes adjudicate dep through to writeReport without defaulting to no-op', async () => {
-    const realAdjudicate = vi.fn().mockResolvedValue({
-      classification: 'bug' as const,
-      confidence: 0.9,
-      confirmedCount: 3,
-      panelSize: 3,
-      votes: [],
-      rationale: 'real adjudicate called',
-    })
-
-    const writeReportDeps: Record<string, unknown> = {}
+  it('writes findings to the store with source=run and the diff/verify findings', async () => {
+    let captured: Record<string, unknown> = {}
     const deps = {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([sampleFinding]),
-      runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, d: Record<string, unknown>) => {
-        Object.assign(writeReportDeps, d)
+      runVerify: vi.fn().mockResolvedValue([sampleVerifyFinding]),
+      writeFindings: vi.fn().mockImplementation(async (_root: string, entry: Record<string, unknown>) => {
+        captured = entry
       }),
-      clock: () => 'run-real-adjudicate',
-      adjudicate: realAdjudicate,
+      clock: () => 'run-store',
     }
-
     await runRun('/tmp/root', {}, deps)
-    expect(writeReportDeps['adjudicate']).toBe(realAdjudicate)
+    expect(captured.source).toBe('run')
+    expect(captured.runId).toBe('run-store')
+    expect(captured.diffFindings).toEqual([sampleFinding])
+    expect(captured.verifyFindings).toEqual([sampleVerifyFinding])
   })
 
-  it('passes store.saveBaseline dep through to writeReport without defaulting to no-op', async () => {
+  it('saves the baseline in run (no longer a report concern)', async () => {
     const realSaveBaseline = vi.fn().mockResolvedValue(undefined)
-    const writeReportDeps: Record<string, unknown> = {}
+    const structure = { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] }
     const deps = {
-      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      collect: vi.fn().mockResolvedValue({ structure, prior: { baseline: null, latestReport: null, feedback: [] }, rawPages: [] }),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockImplementation(async (_root: string, _runId: string, d: Record<string, unknown>) => {
-        Object.assign(writeReportDeps, d)
-      }),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
+      saveBaseline: realSaveBaseline,
       clock: () => 'run-real-store',
-      store: { saveBaseline: realSaveBaseline },
     }
-
     await runRun('/tmp/root', {}, deps)
-    const store = writeReportDeps['store'] as { saveBaseline: unknown }
-    expect(store?.saveBaseline).toBe(realSaveBaseline)
+    expect(realSaveBaseline).toHaveBeenCalledWith('/tmp/root', structure)
   })
 
   // --- Task 4.4: login scenario execution ---
@@ -238,7 +226,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
+      writeFindings: vi.fn().mockImplementation(async (_r: string, d: { verifyFindings: VerifyFinding[] }) => {
         capturedVerifyFindings = d.verifyFindings
       }),
       clock: () => 'run-login-4.4',
@@ -300,7 +288,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => {
+      writeFindings: vi.fn().mockImplementation(async (_r: string, d: { verifyFindings: VerifyFinding[] }) => {
         capturedVerifyFindings = d.verifyFindings
       }),
       clock: () => 'run-login-fail',
@@ -363,7 +351,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn(),
+      writeFindings: vi.fn(),
       clock: () => 'run-2fa',
       scenarios: [loginScenario],
       ctx: {
@@ -414,7 +402,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-no-login',
       scenarios: [nonLoginScenario],
       executeLogin,
@@ -451,7 +439,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-admin-login-no-match',
       scenarios: [adminLoginScenario],
       ctx: {
@@ -539,7 +527,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-close-success',
       scenarios: [makeLoginScenarioWithStep()],
       ctx: makeLoginCtx(),
@@ -566,7 +554,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-close-throw',
       scenarios: [makeLoginScenarioWithStep()],
       ctx: makeLoginCtx(),
@@ -589,7 +577,7 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
       detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
       runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
-      writeReport: vi.fn().mockImplementation(async () => { order.push('report') }),
+      writeFindings: vi.fn().mockImplementation(async () => { order.push('report') }),
       clock: () => 'run-prepare-order',
     }
 
@@ -611,7 +599,7 @@ describe('runRun', () => {
       collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
       detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
       runVerify: vi.fn().mockImplementation(async () => { order.push('verify'); return [] }),
-      writeReport: vi.fn().mockImplementation(async () => { order.push('report') }),
+      writeFindings: vi.fn().mockImplementation(async () => { order.push('report') }),
       clock: () => 'run-skip-prepare',
     }
 
@@ -620,7 +608,7 @@ describe('runRun', () => {
     expect(deps.prepare).not.toHaveBeenCalled()
     expect(order).toEqual(['collect', 'diff', 'verify', 'report'])
     expect(deps.collect).toHaveBeenCalledOnce()
-    expect(deps.writeReport).toHaveBeenCalledOnce()
+    expect(deps.writeFindings).toHaveBeenCalledOnce()
   })
 
   it('calls prepare with the loaded config, root, secrets array, and gitToken', async () => {
@@ -662,7 +650,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-prepare-args',
       ctx,
     }
@@ -686,7 +674,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-prepare-fail',
     }
 
@@ -716,7 +704,7 @@ describe('runRun', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-logout-not-login',
       scenarios: [logoutScenario],
       ctx: {
@@ -792,7 +780,7 @@ describe('runRun — scenario execution stage', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockImplementation(async (_r: string, _id: string, d: { verifyFindings: VerifyFinding[] }) => { captured = d.verifyFindings }),
+      writeFindings: vi.fn().mockImplementation(async (_r: string, d: { verifyFindings: VerifyFinding[] }) => { captured = d.verifyFindings }),
       clock: () => 'run-scn',
       scenarios: [authedScenario],
       ctx: ctxWithCreds,
@@ -810,7 +798,7 @@ describe('runRun — scenario execution stage', () => {
       collect: vi.fn().mockResolvedValue(makeCollectResult()),
       detectDiffs: vi.fn().mockResolvedValue([]),
       runVerify: vi.fn().mockResolvedValue([]),
-      writeReport: vi.fn().mockResolvedValue(undefined),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
       clock: () => 'run-scn-skip',
       scenarios: [authedScenario],
       ctx: ctxWithCreds,
