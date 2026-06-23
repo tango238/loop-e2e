@@ -4,7 +4,8 @@ import type { CollectResult } from '../../pipeline/collect.js'
 import type { RunVerifyDeps } from '../../pipeline/verify/index.js'
 import type { Scenario, LoadedScenario } from '../../scenario/schema.js'
 import { isLoginScenario, findLoginScenario } from '../../scenario/loginScenario.js'
-import type { DbDriverOptions } from '../../services/db/index.js'
+import { createDbAdapter as defaultCreateDbAdapter, type DbDriverOptions } from '../../services/db/index.js'
+import type { DbAdapter, Row } from '../../services/db/adapter.js'
 import type { PageLike } from '../../services/browser/crawler.js'
 import type { LoginResult } from '../../services/browser/login.js'
 import type { prepare } from '../../pipeline/prepare.js'
@@ -209,10 +210,13 @@ async function runScenarioStage(
   // Authenticated-precondition scenarios re-use the login flow; supply the designated login
   // scenario's 2FA config + scriptDir so the session can complete 2FA.
   const login = findLoginScenario(scenarios as LoadedScenario[], loginPath)
+  const { dbQuery, close: closeDb } = buildDbQuery(ctx.config, ctx.secrets.db, deps.dbDrivers)
   const execDeps = {
     ...deps.scenarioExecDeps,
     twoFactor: login?.twoFactor,
     scriptDir: login?.scriptDir,
+    resolveTarget: buildTargetResolver(ctx.config, ctx.secrets),
+    dbQuery,
   }
 
   try {
@@ -222,6 +226,7 @@ async function runScenarioStage(
     return []
   } finally {
     await page.close?.().catch(() => {})
+    await closeDb()
   }
 }
 
@@ -242,6 +247,52 @@ function resolveCredentials(
   const password = auth.passwordEnv ? secrets.targetAuth[auth.passwordEnv] : undefined
   if (!username || !password) return null
   return { username, password }
+}
+
+/** Build a persona-target resolver from config.targets + secrets (name → TargetEnv + creds). */
+export function buildTargetResolver(
+  config: RunContext['config'],
+  secrets: RunContext['secrets'],
+): (name: string) => { target: TargetEnv; creds: { username: string; password: string } } | undefined {
+  return (name) => {
+    const t = config.targets.find((x) => x.name === name)
+    if (!t?.auth) return undefined
+    const c = resolveCredentials(secrets, t.auth)
+    if (!c) return undefined
+    return {
+      target: {
+        name: t.name,
+        baseUrl: t.baseUrl,
+        auth: { strategy: t.auth.strategy, loginPath: t.auth.loginPath, username: c.username, password: c.password },
+      },
+      creds: c,
+    }
+  }
+}
+
+/** Build a lazy db query helper (one adapter per connection) for db: captures, plus a close-all. */
+export function buildDbQuery(
+  config: RunContext['config'],
+  dbSecrets: Record<string, string>,
+  drivers?: DbDriverOptions,
+  createAdapter: typeof defaultCreateDbAdapter = defaultCreateDbAdapter,
+): { dbQuery?: (connection: string, sql: string) => Promise<Row[]>; close: () => Promise<void> } {
+  if (config.databases.length === 0) return { dbQuery: undefined, close: async () => {} }
+  const adapters = new Map<string, DbAdapter>()
+  const dbQuery = async (connection: string, sql: string): Promise<Row[]> => {
+    let a = adapters.get(connection)
+    if (!a) {
+      const conf = config.databases.find((d) => d.name === connection)
+      if (!conf) throw new Error(`db: capture references unknown connection '${connection}'`)
+      a = createAdapter(conf, dbSecrets[conf.passwordEnv] ?? '', drivers)
+      adapters.set(connection, a)
+    }
+    return a.query(sql, [])
+  }
+  const close = async (): Promise<void> => {
+    for (const a of adapters.values()) await a.close().catch(() => {})
+  }
+  return { dbQuery, close }
 }
 
 /**
