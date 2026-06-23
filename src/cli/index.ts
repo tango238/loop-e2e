@@ -436,4 +436,36 @@ program
     }
   })
 
+program
+  .command('report')
+  .description('Aggregate pending findings (from run/explore) + activity into a single report + GitHub issues')
+  .option('--target <name>', 'Target name (for masking/labels; defaults to first target)')
+  .action(async (opts: { target?: string }) => {
+    const cwd = process.cwd()
+    const { runReport } = await import('./commands/report.js')
+    const { renderReport } = await import('../pipeline/report.js')
+    const { readPendingFindings, readPendingActivity, archiveConsumed } = await import('../state/findings.js')
+    try {
+      const r = await runReport(cwd, { target: opts.target }, {
+        loadConfig,
+        readPendingFindings,
+        readPendingActivity,
+        archiveConsumed,
+        renderReport,
+        createLlm,
+        createGithubClient,
+      })
+      if (!r.wrote) {
+        process.stdout.write('report: nothing pending to report\n')
+      } else {
+        process.stdout.write(
+          `report: findings ${r.findings} / sources: ${r.sources.join(', ') || '(activity only)'} → .loop-e2e/reports/${r.reportRunId}/\n`,
+        )
+      }
+    } catch (err) {
+      process.stderr.write(`report failed: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+  })
+
 program.parse()
