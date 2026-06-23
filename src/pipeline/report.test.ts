@@ -5,7 +5,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import type { DiffFinding, VerifyFinding, FindingVerdict, RunContext } from '../domain/types.js'
 import type { Llm } from '../services/llm/client.js'
 import type { Config } from '../config/schema.js'
-import { writeReport } from './report.js'
+import { writeReport, renderReport } from './report.js'
 
 const defaultRefutation: Config['refutation'] = {
   panelSize: 3,
@@ -224,6 +224,46 @@ describe('writeReport', () => {
     })
     const md = await readFile(join(tmpRoot, '.loop-e2e', 'reports', ctx.runId, 'report.md'), 'utf8')
     expect(md).toMatch(/\*\*ページ:\*\* \/user\/create/)
+  })
+
+  it('renderReport: includes an 実施サマリ from activity and does not require a store', async () => {
+    const ctx = makeCtx(tmpRoot)
+    await renderReport(tmpRoot, ctx.runId, {
+      ctx,
+      diffFindings: [],
+      verifyFindings: [],
+      activity: [
+        { source: 'grow', runId: 'g1', startedAt: 't', summary: 'proposed 36 scenarios' },
+        { source: 'run', runId: 'r1', startedAt: 't', summary: 'executed 6 scenarios' },
+      ],
+      llm: makeMockLlm(),
+      adjudicate: vi.fn(),
+      upsertIssue: vi.fn(),
+      githubClient: null,
+      repo: null,
+    })
+    const md = await readFile(join(tmpRoot, '.loop-e2e', 'reports', ctx.runId, 'report.md'), 'utf8')
+    expect(md).toContain('実施サマリ')
+    expect(md).toContain('[grow] proposed 36 scenarios')
+    expect(md).toContain('[run] executed 6 scenarios')
+  })
+
+  it('renderReport: de-duplicates findings with the same fingerprint across sources', async () => {
+    const ctx = makeCtx(tmpRoot)
+    const dup: VerifyFinding = { category: 'security', severity: 'medium', title: 'CSRF', detail: 'no token', evidence: '[https://x/login] e' }
+    const adjudicateMock = vi.fn().mockResolvedValue(makeVerdict({ classification: 'uncertain', confidence: 0.5 }))
+    await renderReport(tmpRoot, ctx.runId, {
+      ctx,
+      diffFindings: [],
+      verifyFindings: [dup, { ...dup }], // same fingerprint (category/title/detail)
+      llm: makeMockLlm(),
+      adjudicate: adjudicateMock,
+      upsertIssue: vi.fn(),
+      githubClient: null,
+      repo: null,
+    })
+    // adjudicate runs once per unique finding → de-duplicated to 1
+    expect(adjudicateMock).toHaveBeenCalledTimes(1)
   })
 
   it('no findings: empty input → report still written, no upsertIssue', async () => {

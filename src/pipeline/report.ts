@@ -13,14 +13,11 @@ import type {
   Report,
   SiteStructure,
 } from '../domain/types.js'
+import type { ActivityEntry } from '../state/findings.js'
 import type { Llm } from '../services/llm/client.js'
 import type { GithubClient } from '../services/github/client.js'
 import type { RepoRef } from '../services/github/labels.js'
 import type { Config } from '../config/schema.js'
-
-type StoreApi = {
-  saveBaseline: (root: string, structure: SiteStructure) => Promise<void>
-}
 
 type AdjudicateFn = (
   llm: Llm,
@@ -37,15 +34,15 @@ type UpsertIssueFn = (
   secrets?: string[],
 ) => Promise<void>
 
-export type WriteReportDeps = {
+export type RenderReportDeps = {
   ctx: RunContext
   diffFindings: DiffFinding[]
   verifyFindings: VerifyFinding[]
-  currentStructure: SiteStructure
+  /** Activity summary lines from grow/scenario/run/explore (shown in the report). */
+  activity?: ActivityEntry[]
   llm: Llm
   adjudicate: AdjudicateFn
   upsertIssue: UpsertIssueFn
-  store: StoreApi
   githubClient: GithubClient | null
   repo: RepoRef | null
 }
@@ -136,19 +133,43 @@ Write a professional summary with:
 Use Markdown formatting.`
 }
 
+/** De-duplicate findings across sources by fingerprint, keeping first occurrence. */
+function dedupeFindings<T extends DiffFinding | VerifyFinding>(findings: T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const f of findings) {
+    const fp = findingFingerprint(f)
+    if (seen.has(fp)) continue
+    seen.add(fp)
+    out.push(f)
+  }
+  return out
+}
+
+/** Markdown "実施サマリ" listing what each command did (grow/scenario/run/explore). */
+function activitySection(activity: ActivityEntry[]): string {
+  if (activity.length === 0) return ''
+  const lines = activity.map((a) => `- [${a.source}] ${a.summary}`).join('\n')
+  return `\n\n## 実施サマリ\n\n${lines}`
+}
+
 /**
- * Generates and persists a run report:
+ * Generates and persists a report from aggregated findings:
  * 1. Generates body with Sonnet (role=report)
  * 2. Adjudicates each finding with Opus panel
  * 3. Only files GitHub issue if BOTH gates pass (confirmed + confidence≥threshold)
- * 4. Writes report.md + report.json, updates baseline
+ * 4. Writes report.md + report.json
+ * Findings are de-duplicated across sources; baseline is NOT touched (the run command owns it).
  */
-export async function writeReport(
+export async function renderReport(
   root: string,
   runId: string,
-  deps: WriteReportDeps,
+  deps: RenderReportDeps,
 ): Promise<void> {
-  const { ctx, diffFindings, verifyFindings, currentStructure, llm, adjudicate, upsertIssue, store, githubClient, repo } = deps
+  const { ctx, llm, adjudicate, upsertIssue, githubClient, repo } = deps
+  const diffFindings = dedupeFindings(deps.diffFindings)
+  const verifyFindings = dedupeFindings(deps.verifyFindings)
+  const activity = deps.activity ?? []
   const paths = statePaths(root)
   const reportDir = join(paths.reports, runId)
   await ensureDir(reportDir)
@@ -238,7 +259,7 @@ export async function writeReport(
         .join('\n\n')
     : ''
 
-  const mdContent = `${reportBody}${uncertainSection}\n`
+  const mdContent = `${reportBody}${activitySection(activity)}${uncertainSection}\n`
 
   // 6. Write files — mask secrets from both written artifacts before persisting
   const safeMd = maskSecrets(mdContent, allSecrets)
@@ -246,8 +267,18 @@ export async function writeReport(
   await writeFile(join(reportDir, 'report.json'), safeJson, 'utf8')
   await writeFile(join(reportDir, 'report.md'), safeMd, 'utf8')
   logger.info({ runId, reportDir }, 'Report written')
+}
 
-  // 7. Update baseline
-  await store.saveBaseline(root, currentStructure)
+// --- Back-compat shim (removed once run/explore migrate to the findings store) ---
+// Old callers also expect the baseline to be saved; renderReport no longer does this.
+export type WriteReportDeps = RenderReportDeps & {
+  currentStructure: SiteStructure
+  store: { saveBaseline: (root: string, structure: SiteStructure) => Promise<void> }
+}
+
+/** @deprecated Use renderReport (+ save the baseline in the caller). Kept until run/explore migrate. */
+export async function writeReport(root: string, runId: string, deps: WriteReportDeps): Promise<void> {
+  await renderReport(root, runId, deps)
+  await deps.store.saveBaseline(root, deps.currentStructure)
   logger.debug({ runId }, 'Baseline updated')
 }
