@@ -4,7 +4,7 @@ import { logger } from '../../util/logger.js'
 import { maskSecrets } from '../../util/mask.js'
 import type { PageLike } from './crawler.js'
 import type { TargetEnv } from '../../domain/types.js'
-import type { Scenario, ScenarioTwoFactor, LoadedScenario } from '../../scenario/schema.js'
+import { allSteps, type Scenario, type ScenarioTwoFactor, type LoadedScenario } from '../../scenario/schema.js'
 import type { ComposeRunner } from '../compose/compose.js'
 
 export type LoginResult = {
@@ -335,7 +335,7 @@ function extractSelectorsFromScenario(scenario: Scenario): {
   let passwordSelector: string | null = null
   let submitSelector: string | null = null
 
-  for (const step of scenario.steps) {
+  for (const step of allSteps(scenario)) {
     if (step.action === 'fill') {
       const t = step.target.toLowerCase()
       if (

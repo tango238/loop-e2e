@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { executeScenario } from './scenarioExec.js'
+import { executeScenario, executeSteps } from './scenarioExec.js'
 import type { PageLike } from './crawler.js'
 import type { TargetEnv } from '../../domain/types.js'
 import type { Scenario } from '../../scenario/schema.js'
@@ -168,5 +168,63 @@ describe('executeScenario', () => {
       { sleep },
     )
     expect(r.ok).toBe(true)
+  })
+})
+
+function fakeCapturePage(opts: { captures?: Record<string, string>; contentRef?: { html: string }; urlRef?: { u: string } } = {}) {
+  const content = opts.contentRef ?? { html: '' }
+  const urlRef = opts.urlRef ?? { u: 'https://app.test/start' }
+  return {
+    goto: async (u: string) => { urlRef.u = u },
+    url: () => urlRef.u,
+    title: async () => 't',
+    content: async () => content.html,
+    evaluate: async () => ({}),
+    screenshot: async () => undefined,
+    waitForLoadState: async () => {},
+    locator: (sel: string) => ({
+      fill: async () => {},
+      click: async () => {},
+      count: async () => (opts.captures && sel in opts.captures ? 1 : 0),
+      textContent: async () => opts.captures?.[sel] ?? null,
+      inputValue: async () => '',
+    }),
+  } as unknown as PageLike
+}
+
+const capTarget = { name: 'admin', baseUrl: 'https://app.test', auth: { strategy: 'form', loginPath: '/login' } } as TargetEnv
+
+describe('executeSteps capture + {{VAR}}', () => {
+  it('captures a value into the shared vars bag and resolves {{VAR}} in a later assert target', async () => {
+    const content = { html: 'order discount SUMMER25 applied' }
+    const page = fakeCapturePage({ captures: { '[data-code]': 'SUMMER25' }, contentRef: content })
+    const vars: Record<string, string> = {}
+    const r = await executeSteps(page, capTarget, [
+      { action: 'capture', target: '[data-code]', var: 'COUPON', expectedOutcome: 'got code' },
+      { action: 'assert', target: 'text={{COUPON}}', expectedOutcome: 'shown' },
+    ], { vars })
+    expect(vars.COUPON).toBe('SUMMER25')
+    expect(r.ok).toBe(true)
+  })
+
+  it('fails a capture when the target is not found', async () => {
+    const page = fakeCapturePage({ captures: {} })
+    const r = await executeSteps(page, capTarget, [
+      { action: 'capture', target: '#missing', var: 'X', expectedOutcome: 'x' },
+    ], { vars: {} })
+    expect(r.ok).toBe(false)
+    expect(r.failedStepIndex).toBe(0)
+  })
+
+  it('does not leak a captured value into the failure detail (shows raw {{VAR}})', async () => {
+    const content = { html: 'nothing here' }
+    const page = fakeCapturePage({ captures: { '[data-code]': 'SECRET-CODE' }, contentRef: content })
+    const r = await executeSteps(page, capTarget, [
+      { action: 'capture', target: '[data-code]', var: 'COUPON', expectedOutcome: 'c' },
+      { action: 'assert', target: 'text={{COUPON}}', expectedOutcome: 'shown' },
+    ], { vars: {} })
+    expect(r.ok).toBe(false)
+    expect(r.detail).toContain('{{COUPON}}')
+    expect(r.detail).not.toContain('SECRET-CODE')
   })
 })

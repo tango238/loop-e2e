@@ -8,6 +8,8 @@ export const ScenarioStepSchema = z.object({
   action: z.string().min(1),
   target: z.string().min(1),
   input: z.string().optional(),
+  /** Variable name written by a `capture` step (referenced later as {{VAR}}); uppercase to match resolution. */
+  var: z.string().regex(/^[A-Z0-9_]+$/, 'capture var must be UPPER_SNAKE (matches {{VAR}} resolution)').optional(),
   expectedOutcome: z.string().min(1),
 })
 
@@ -34,6 +36,23 @@ export const PreconditionSchema = z.object({
 })
 export type Precondition = z.infer<typeof PreconditionSchema>
 
+// --- Persona (multi-act): a named actor with its own session (target reserved for Phase3) ---
+export const PersonaSchema = z.object({
+  name: z.string().min(1),
+  target: z.string().optional(),
+  auth: z.enum(['authenticated', 'unauthenticated']),
+  loginPath: z.string().optional(),
+  credEnv: z.object({ usernameEnv: z.string().min(1), passwordEnv: z.string().min(1) }).optional(),
+})
+export type Persona = z.infer<typeof PersonaSchema>
+
+// --- Act: a persona-scoped block of steps within a multi-act scenario ---
+export const ActSchema = z.object({
+  persona: z.string().optional(),
+  steps: z.array(ScenarioStepSchema).min(1),
+})
+export type Act = z.infer<typeof ActSchema>
+
 // --- Scenario-owned 2FA config ---
 // Environment-specific 2FA glue lives with the scenario (not in config). `pinCommand` is run
 // with cwd = the scenario's script dir (scenarios/<file-basename>/), so it can reference scripts
@@ -47,16 +66,35 @@ export const ScenarioTwoFactorSchema = z.object({
 export type ScenarioTwoFactor = z.infer<typeof ScenarioTwoFactorSchema>
 
 // --- Full scenario schema (spec §3) ---
-export const ScenarioSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  businessFlow: z.string().min(1),
-  steps: z.array(ScenarioStepSchema).min(1),
-  expectedResults: z.array(ExpectedResultSchema).min(1),
-  expectedDbState: z.array(ExpectedDbStateSchema),
-  precondition: PreconditionSchema.optional(),
-  twoFactor: ScenarioTwoFactorSchema.optional(),
-})
+export const ScenarioSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    businessFlow: z.string().min(1),
+    steps: z.array(ScenarioStepSchema).min(1).optional(),
+    acts: z.array(ActSchema).min(1).optional(),
+    personas: z.array(PersonaSchema).optional(),
+    expectedResults: z.array(ExpectedResultSchema).min(1),
+    expectedDbState: z.array(ExpectedDbStateSchema),
+    precondition: PreconditionSchema.optional(),
+    twoFactor: ScenarioTwoFactorSchema.optional(),
+  })
+  .superRefine((s, ctx) => {
+    if ((s.steps !== undefined) === (s.acts !== undefined)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'scenario must have exactly one of `steps` or `acts`' })
+    }
+    const names = new Set((s.personas ?? []).map((p) => p.name))
+    for (const act of s.acts ?? []) {
+      if (act.persona !== undefined && !names.has(act.persona)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `act references unknown persona: ${act.persona}` })
+      }
+    }
+    for (const st of [...(s.steps ?? []), ...(s.acts ?? []).flatMap((a) => a.steps)]) {
+      if (st.action === 'capture' && !st.var) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'capture step requires `var`' })
+      }
+    }
+  })
 
 export type ScenarioStep = z.infer<typeof ScenarioStepSchema>
 export type ExpectedResult = z.infer<typeof ExpectedResultSchema>
@@ -64,6 +102,16 @@ export type ExpectedDbState = z.infer<typeof ExpectedDbStateSchema>
 
 /** Full scenario type (replaces the minimal definition in domain/types.ts) */
 export type Scenario = z.infer<typeof ScenarioSchema>
+
+/** Acts of a scenario: explicit `acts`, or flat `steps` as one implicit (persona-less) act. */
+export function toActs(scenario: Scenario): Act[] {
+  return scenario.acts ?? [{ steps: scenario.steps ?? [] }]
+}
+
+/** All steps of a scenario, flattened across acts. */
+export function allSteps(scenario: Scenario): ScenarioStep[] {
+  return toActs(scenario).flatMap((a) => a.steps)
+}
 
 /**
  * A scenario as loaded from disk, annotated with its script directory

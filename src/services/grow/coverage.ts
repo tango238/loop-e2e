@@ -1,5 +1,5 @@
 import type { RawPage } from '../../domain/types.js'
-import type { Scenario } from '../../scenario/schema.js'
+import { allSteps, type Scenario } from '../../scenario/schema.js'
 
 /**
  * Return the discovered pages whose path is NOT already covered by an existing
@@ -10,7 +10,7 @@ import type { Scenario } from '../../scenario/schema.js'
 export function findUncoveredPages(discovered: RawPage[], scenarios: Scenario[]): RawPage[] {
   const covered = new Set<string>()
   for (const scenario of scenarios) {
-    for (const step of scenario.steps) {
+    for (const step of allSteps(scenario)) {
       if (step.action === 'navigate') {
         covered.add(normalizePath(step.target))
       }

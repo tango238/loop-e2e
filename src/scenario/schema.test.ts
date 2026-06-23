@@ -6,6 +6,8 @@ import {
   ScenarioSchema,
   loadScenarios,
   saveScenario,
+  toActs,
+  allSteps,
   type Scenario,
 } from './schema.js'
 
@@ -196,5 +198,61 @@ describe('ScenarioSchema.precondition', () => {
 
   it('rejects an invalid auth value', () => {
     expect(ScenarioSchema.safeParse({ ...base, precondition: { auth: 'maybe' } }).success).toBe(false)
+  })
+})
+
+describe('multi-act schema', () => {
+  const base = {
+    id: 'm', title: 'T', businessFlow: 'f',
+    expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+  }
+  const stp = (action: string, target = '/x', extra: Record<string, unknown> = {}) =>
+    ({ action, target, expectedOutcome: 'o', ...extra })
+
+  it('accepts a flat-steps scenario (single-act sugar)', () => {
+    const s = ScenarioSchema.parse({ ...base, steps: [stp('navigate')] })
+    expect(toActs(s)).toEqual([{ steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }] }])
+    expect(allSteps(s)).toHaveLength(1)
+  })
+
+  it('accepts a multi-act scenario and flattens steps', () => {
+    const s = ScenarioSchema.parse({
+      ...base,
+      personas: [{ name: 'a', auth: 'authenticated' }, { name: 'b', auth: 'authenticated' }],
+      acts: [{ persona: 'a', steps: [stp('navigate')] }, { persona: 'b', steps: [stp('assert', 'text={{X}}')] }],
+    })
+    expect(toActs(s)).toHaveLength(2)
+    expect(allSteps(s)).toHaveLength(2)
+  })
+
+  it('rejects having both steps and acts', () => {
+    expect(() => ScenarioSchema.parse({ ...base, steps: [stp('navigate')], acts: [{ steps: [stp('navigate')] }] })).toThrow(/exactly one/)
+  })
+
+  it('rejects having neither steps nor acts', () => {
+    expect(() => ScenarioSchema.parse({ ...base })).toThrow(/exactly one/)
+  })
+
+  it('rejects an act referencing an unknown persona', () => {
+    expect(() => ScenarioSchema.parse({ ...base, personas: [{ name: 'a', auth: 'authenticated' }], acts: [{ persona: 'ghost', steps: [stp('navigate')] }] })).toThrow(/unknown persona/)
+  })
+
+  it('rejects a capture step without var', () => {
+    expect(() => ScenarioSchema.parse({ ...base, steps: [stp('capture', '#c')] })).toThrow(/capture step requires/)
+  })
+
+  it('accepts a capture step with var', () => {
+    const s = ScenarioSchema.parse({ ...base, steps: [stp('capture', '#c', { var: 'CODE' })] })
+    expect(allSteps(s)[0].var).toBe('CODE')
+  })
+})
+
+describe('capture var naming', () => {
+  const base = {
+    id: 'm', title: 'T', businessFlow: 'f',
+    expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+  }
+  it('rejects a lowercase capture var', () => {
+    expect(() => ScenarioSchema.parse({ ...base, steps: [{ action: 'capture', target: '#c', var: 'coupon', expectedOutcome: 'o' }] })).toThrow(/UPPER_SNAKE/)
   })
 })

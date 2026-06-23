@@ -89,7 +89,7 @@ precondition:
 - **`unauthenticated`** — cookies are cleared (logged-out state) before the steps run.
 - **absent** — no auth handling (backward compatible with untagged scenarios).
 
-Supported step actions: `navigate`, `click`, `fill`, `submit`, `wait`, `assert`.
+Supported step actions: `navigate`, `click`, `fill`, `submit`, `wait`, `assert`, `capture`.
 `wait`/`assert` targets use `text=…` (text present), `url=…` (current URL contains), a bare
 integer (milliseconds, `wait` only), or a CSS selector (element exists). `fill` inputs may
 reference secrets as `{{ENV_NAME}}` (resolved from `.env`/process env) or `{{TWO_FACTOR_PIN}}`
@@ -97,6 +97,39 @@ reference secrets as `{{ENV_NAME}}` (resolved from `.env`/process env) or `{{TWO
 that references `{{TWO_FACTOR_PIN}}` must therefore declare a `twoFactor` block). Resolved
 secret values are masked out of all findings and logs; a referenced placeholder that cannot be
 resolved fails the scenario.
+
+### マルチアクト・シナリオ（複数アクターのフロー）
+
+1シナリオで複数の人格（persona）が順に操作するフローを表現できます。`personas` でアクターを宣言し、
+`acts` で人格ごとの手順ブロックを並べます。段の境界で人格が変わると再ログインします。`capture` で
+DOM の値を変数に取り込み、後続ステップで `{{VAR}}`（大文字）として `input`・`target` の両方で参照できます。
+
+```yaml
+id: admin-create-then-verify
+title: 管理者が作成し、別人格が確認
+businessFlow: 管理者がクーポンを作成し、別の管理者が一覧で確認する
+personas:
+  - { name: creator,  auth: authenticated }
+  - { name: verifier, auth: authenticated, credEnv: { usernameEnv: REVIEWER_USER, passwordEnv: REVIEWER_PASS } }
+acts:
+  - persona: creator
+    steps:
+      - { action: navigate, target: /coupon/create, expectedOutcome: フォーム表示 }
+      - { action: fill, target: '[name=code]', input: SUMMER25, expectedOutcome: 入力 }
+      - { action: submit, target: 'button[type=submit]', expectedOutcome: 作成完了 }
+      - { action: capture, target: '[data-testid=coupon-code]', var: COUPON, expectedOutcome: コード取得 }
+  - persona: verifier
+    steps:
+      - { action: navigate, target: /coupon, expectedOutcome: 一覧表示 }
+      - { action: assert, target: 'text={{COUPON}}', expectedOutcome: 作成済みが見える }
+expectedResults:
+  - { kind: ui, description: クーポンが一覧に出る, assertion: 'text={{COUPON}}' }
+expectedDbState: []
+```
+
+- `steps`（フラット・単一アクター）と `acts`（マルチアクター）は**排他**。`steps` の既存シナリオはそのまま動きます。
+- `capture` の取得元は **DOM のみ**（input value → textContent）。同一ターゲット上での人格切替に対応（別アプリ跨ぎは今後対応）。
+- `persona.credEnv` でアクター別の認証情報（`.env` のキー名）を指定。未指定なら run の認証情報を使います。
 
 **Writing reliable scenarios:**
 
