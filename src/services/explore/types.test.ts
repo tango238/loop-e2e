@@ -20,16 +20,25 @@ describe('explore types schemas', () => {
     expect(c.type).toBe('email')
   })
 
-  it('rejects an unknown constraint type', () => {
-    expect(() =>
-      FieldConstraintSchema.parse({
-        field: 'x',
-        selector: '#x',
-        required: false,
-        type: 'banana',
-        evidence: '',
-      }),
-    ).toThrow()
+  it('leniently coerces a malformed constraint to sensible defaults (no throw)', () => {
+    // unknown type → 'unknown', missing required/evidence → defaults, string maxLength → dropped
+    const c = FieldConstraintSchema.parse({ field: 'x', selector: '#x', type: 'banana', maxLength: 'lots' })
+    expect(c.type).toBe('unknown')
+    expect(c.required).toBe(false)
+    expect(c.evidence).toBe('')
+    expect(c.maxLength).toBeUndefined()
+  })
+
+  it('FieldConstraintsSchema normalizes any shape into { constraints: [...] }', () => {
+    const item = { field: 'email', selector: '[name="email"]', required: true, type: 'email', evidence: 'e' }
+    // bare array
+    expect(FieldConstraintsSchema.parse([item]).constraints).toHaveLength(1)
+    // wrapped under the right key
+    expect(FieldConstraintsSchema.parse({ constraints: [item] }).constraints).toHaveLength(1)
+    // wrapped under a different key (LLM used "fields")
+    expect(FieldConstraintsSchema.parse({ fields: [item] }).constraints).toHaveLength(1)
+    // object with no array (LLM gave up) → empty, not a throw
+    expect(FieldConstraintsSchema.parse({}).constraints).toEqual([])
   })
 
   it('wraps constraints/tables/cases/findings', () => {
