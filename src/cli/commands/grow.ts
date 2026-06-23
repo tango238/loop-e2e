@@ -1,10 +1,19 @@
 import { join, isAbsolute } from 'node:path'
 import { loadConfig as defaultLoadConfig } from '../../config/load.js'
 import { grow as defaultGrow, type GrowDeps, type GrowResult } from '../../pipeline/grow.js'
+import { collectRequirements as defaultCollectRequirements } from '../../services/repo/reader.js'
 import type { Config } from '../../config/schema.js'
 import type { Secrets, TargetEnv } from '../../domain/types.js'
 
-export type RunGrowOpts = { target?: string; maxPages?: number; skipPrepare?: boolean }
+export type RunGrowOpts = {
+  target?: string
+  maxPages?: number
+  skipPrepare?: boolean
+  sourceOnly?: boolean
+  crawlOnly?: boolean
+  /** Extra requirement files (from the `--from` of the deprecated `scenario` alias). */
+  fromPaths?: string[]
+}
 
 export type RunGrowDeps = GrowDeps & {
   /** Injectable for tests */
@@ -24,15 +33,24 @@ export async function runGrow(root: string, opts: RunGrowOpts, deps: RunGrowDeps
   const load = deps.loadConfig ?? defaultLoadConfig
   const growFn = deps.grow ?? defaultGrow
 
+  if (opts.sourceOnly && opts.crawlOnly) {
+    throw new Error('grow: --source-only and --crawl-only cannot both be set')
+  }
+
   const { config, secrets } = await load(root)
 
   const target = selectTarget(config, opts.target)
-  if (!target.auth || target.auth.strategy !== 'form') {
-    throw new Error(`grow: target '${target.name}' has no form login configured`)
-  }
-  const creds = resolveCredentials(secrets, target.auth)
-  if (!creds) {
-    throw new Error(`grow: missing credentials for target '${target.name}' (check usernameEnv/passwordEnv in .env)`)
+  // Crawl needs a form login + credentials; --source-only does not (no live app).
+  let creds = { username: '', password: '' }
+  if (!opts.sourceOnly) {
+    if (!target.auth || target.auth.strategy !== 'form') {
+      throw new Error(`grow: target '${target.name}' has no form login configured`)
+    }
+    const resolved = resolveCredentials(secrets, target.auth)
+    if (!resolved) {
+      throw new Error(`grow: missing credentials for target '${target.name}' (check usernameEnv/passwordEnv in .env)`)
+    }
+    creds = resolved
   }
 
   const envTarget = toTargetEnv(target, creds)
@@ -53,15 +71,18 @@ export async function runGrow(root: string, opts: RunGrowOpts, deps: RunGrowDeps
 
   const startedAt = new Date().toISOString()
   const result = await growFn(
-    { config: growConfig, root, scenarioDir, target: envTarget, creds, skipPrepare: opts.skipPrepare },
-    { ...deps, secrets: allSecrets, gitToken: secrets.githubToken },
+    {
+      config: growConfig, root, scenarioDir, target: envTarget, creds, skipPrepare: opts.skipPrepare,
+      sourceOnly: opts.sourceOnly, crawlOnly: opts.crawlOnly, fromPaths: opts.fromPaths,
+    },
+    { ...deps, collectRequirements: deps.collectRequirements ?? defaultCollectRequirements, secrets: allSecrets, gitToken: secrets.githubToken },
   )
 
   // Record activity for the aggregated `report` (grow produces scenarios, not findings).
   const runId = deps.clock ? deps.clock() : new Date().toISOString().replace(/[:.]/g, '-')
   await deps.appendActivity?.(root, {
     source: 'grow', runId, startedAt,
-    summary: `proposed ${result.proposed.length} scenarios (discovered ${result.discovered}, uncovered ${result.uncovered})`,
+    summary: `proposed ${result.proposed.length} scenarios (mode ${result.mode}, discovered ${result.discovered}, uncovered ${result.uncovered}, source-repos ${result.requirementsRepos})`,
   })
 
   return result

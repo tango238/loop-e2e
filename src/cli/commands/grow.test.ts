@@ -25,12 +25,13 @@ const secrets: Secrets = {
 function makeDeps(over: Partial<RunGrowDeps> = {}): RunGrowDeps {
   return {
     loadConfig: vi.fn(async () => ({ config, secrets })),
-    grow: vi.fn(async () => ({ discovered: 1, uncovered: 1, proposed: [] })),
+    grow: vi.fn(async () => ({ discovered: 1, uncovered: 1, proposed: [], mode: 'crawl' as const, requirementsRepos: 0 })),
     createPage: vi.fn(),
     authenticate: vi.fn(),
     discoverPages: vi.fn(),
     findUncoveredPages: vi.fn(),
     proposeScenarios: vi.fn(),
+    collectRequirements: vi.fn(),
     loadScenarios: vi.fn(),
     saveProposedScenario: vi.fn(),
     llm: { complete: vi.fn() } as never,
@@ -58,6 +59,18 @@ describe('runGrow', () => {
     await runGrow('/base', { maxPages: 5 }, deps)
     const [growArgs] = (deps.grow as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(growArgs.config.grow.maxPages).toBe(5)
+  })
+
+  it('source-only: passes sourceOnly into grow args', async () => {
+    const deps = makeDeps()
+    await runGrow('/base', { sourceOnly: true }, deps)
+    const [growArgs] = (deps.grow as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(growArgs.sourceOnly).toBe(true)
+  })
+
+  it('rejects --source-only and --crawl-only together', async () => {
+    const deps = makeDeps()
+    await expect(runGrow('/base', { sourceOnly: true, crawlOnly: true }, deps)).rejects.toThrow(/both/i)
   })
 
   it('throws when credentials are missing', async () => {
