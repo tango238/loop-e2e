@@ -92,16 +92,17 @@ export async function executeScenario(
     scriptDir: (scenario as LoadedScenario).scriptDir ?? deps.scriptDir,
   }
 
+  const steps = scenario.steps ?? []
   const fail = (i: number, why: string): ScenarioRunResult => ({
     scenarioId: scenario.id,
     ok: false,
     failedStepIndex: i,
-    detail: mask(`step ${i} (${scenario.steps[i]?.action}) failed: ${why}`),
+    detail: mask(`step ${i} (${steps[i]?.action}) failed: ${why}`),
     finalUrl: page.url(),
   })
 
-  for (let i = 0; i < scenario.steps.length; i++) {
-    const step: ScenarioStep = scenario.steps[i]
+  for (let i = 0; i < steps.length; i++) {
+    const step: ScenarioStep = steps[i]
     try {
       switch (step.action) {
         case 'navigate': {
@@ -149,7 +150,7 @@ export async function executeScenario(
   return {
     scenarioId: scenario.id,
     ok: true,
-    detail: `passed (${scenario.steps.length} steps)`,
+    detail: `passed (${steps.length} steps)`,
     finalUrl: page.url(),
   }
 }

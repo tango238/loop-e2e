@@ -1,6 +1,6 @@
 import { firstNavigateTarget, apiEndpoints } from './convert.js'
 import type { Usecase } from './types.js'
-import type { Scenario } from '../../scenario/schema.js'
+import { allSteps, type Scenario } from '../../scenario/schema.js'
 
 type RouteKey = { method: string; path: string }
 
@@ -47,7 +47,7 @@ function routeKeyUnder(key: RouteKey, route: RouteKey): boolean {
 
 /** All navigate targets, normalized to paths. */
 export function navigateRoutes(scenario: Scenario): string[] {
-  return scenario.steps.filter((s) => s.action === 'navigate').map((s) => normalizePath(s.target))
+  return allSteps(scenario).filter((s) => s.action === 'navigate').map((s) => normalizePath(s.target))
 }
 
 function usecaseRouteKeys(uc: Usecase): RouteKey[] {

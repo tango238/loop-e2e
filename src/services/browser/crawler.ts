@@ -2,7 +2,7 @@ import { ensureDir } from '../../util/fs.js'
 import { logger } from '../../util/logger.js'
 import { screenshot } from './snapshot.js'
 import type { RawPage, TargetEnv } from '../../domain/types.js'
-import type { Scenario } from '../../scenario/schema.js'
+import { allSteps, type Scenario } from '../../scenario/schema.js'
 
 // Minimal shape used from Playwright's Browser/Page to keep the module unit-testable
 export type PageLike = {
@@ -147,7 +147,7 @@ export async function crawlWithBrowser(
 
     // Follow scenario step navigation targets to build multi-page crawl
     for (const scenario of scenarios) {
-      for (const step of scenario.steps) {
+      for (const step of allSteps(scenario)) {
         if (!isNavigationTarget(step.target)) continue
 
         const targetUrl = resolveUrl(step.target, target.baseUrl)

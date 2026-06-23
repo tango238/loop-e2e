@@ -1,4 +1,4 @@
-import type { Scenario } from './schema.js'
+import { allSteps, type Scenario } from './schema.js'
 
 /**
  * Returns true if the scenario looks like a login scenario.
@@ -9,7 +9,7 @@ import type { Scenario } from './schema.js'
  */
 export function isLoginScenario(scenario: Scenario, loginPath?: string): boolean {
   // Primary: exact path match
-  if (loginPath && scenario.steps.some((s) => s.target === loginPath)) {
+  if (loginPath && allSteps(scenario).some((s) => s.target === loginPath)) {
     return true
   }
 
@@ -18,7 +18,7 @@ export function isLoginScenario(scenario: Scenario, loginPath?: string): boolean
   if (loginPath) {
     const text = `${scenario.title} ${scenario.businessFlow}`.toLowerCase()
     const mentionsLogin = text.includes('login') || text.includes('sign in') || text.includes('signin')
-    const hasCredentialStep = scenario.steps.some(
+    const hasCredentialStep = allSteps(scenario).some(
       (s) =>
         s.target === loginPath &&
         (s.action === 'fill' || s.action === 'submit' || s.action === 'login'),

@@ -1,11 +1,11 @@
 import { LE_PREFIX } from './types.js'
 import type { ApiEndpoint, OperationScenario, OperationStep, PendingEntry } from './types.js'
-import type { Scenario } from '../../scenario/schema.js'
+import { allSteps, type Scenario } from '../../scenario/schema.js'
 
 const METHOD_RE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY)\s+(\S+)/i
 
 export function firstNavigateTarget(scenario: Scenario): string | null {
-  const nav = scenario.steps.find((s) => s.action === 'navigate')
+  const nav = allSteps(scenario).find((s) => s.action === 'navigate')
   return nav ? nav.target : null
 }
 
@@ -54,7 +54,7 @@ export function apiEndpointString(eps: ApiEndpoint[]): string {
 }
 
 export function toOperationSteps(scenario: Scenario): OperationStep[] {
-  return scenario.steps.map((s, i) => ({
+  return allSteps(scenario).map((s, i) => ({
     step_no: i + 1,
     actor: 'ユーザー',
     action: `${s.action} ${s.target}`.trim(),

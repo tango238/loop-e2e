@@ -19,7 +19,7 @@ export type ExecuteScenariosDeps = ScenarioExecDeps &
 
 /** The auth probe target for an authenticated scenario is its first navigate step (default '/'). */
 function firstNavigateTarget(s: Scenario): string {
-  const nav = s.steps.find((st) => st.action === 'navigate')
+  const nav = (s.steps ?? []).find((st) => st.action === 'navigate')
   return nav?.target ?? '/'
 }
 
