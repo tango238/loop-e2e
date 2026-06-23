@@ -104,7 +104,7 @@ async function runMultiAct(
     if (persona?.target) {
       const resolved = deps.resolveTarget?.(persona.target)
       if (!resolved) {
-        return scenarioFinding(scenario, false, `${label} unknown target '${persona.target}' (not in config.targets)`, lastUrl)
+        return scenarioFinding(scenario, false, `${label} cannot use target '${persona.target}' (not in config.targets, or missing auth/credentials)`, lastUrl)
       }
       actTarget = resolved.target
       baseCreds = resolved.creds
@@ -122,7 +122,9 @@ async function runMultiAct(
         )
       }
       actSecrets = [...(deps.secrets ?? []), personaCreds.username, personaCreds.password].filter(Boolean)
-      // Re-login only when switching identity ON THE SAME target; a different target is a separate domain/session.
+      // Re-login only when switching identity ON THE SAME target; a different target is a separate
+      // domain/session. Note: clearCookies (forceReauth) wipes the WHOLE context, so an
+      // A→B→A' flow (same target A, new identity) also drops B's session — acceptable, rare.
       const forceReauth = ai > 0 && actTarget.name === prevTargetName && persona?.name !== prevPersona
       const r = await ensureAuth(page, actTarget, personaCreds, firstNavOf(act.steps), { ...deps, secrets: actSecrets, forceReauth })
       if (!r.ok) {

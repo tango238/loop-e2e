@@ -159,6 +159,12 @@ expectedDbState:
 ```
 
 - 跨ぎ `expectedDbState` は対象 DB を `config.databases` に追加すれば既存の検証ステージが照合します。
+- **`db:` SQL はシナリオ作者が書く信頼入力**です（read-only 用途）。`db:` SQL に渡せる `{{VAR}}` には
+  DOM/URL から `capture` した**アプリ由来の値**が入り得るため、SQL は文字列補間されます。**アプリ由来の
+  untrusted な値を `db:` SQL に直接補間しないでください**（SQL インジェクションになり得ます）。内部 ID 等の
+  信頼できる値の照合に限って使ってください。
+- **A→B→A フロー**（同一ターゲット A 上で人格だけ切替）では再ログイン時にコンテキスト全体の cookie を
+  消すため、間に挟んだ別ターゲット B のセッションも失われます（稀なケース）。
 
 **Writing reliable scenarios:**
 

@@ -83,6 +83,7 @@ dbQuery?: (connection: string, sql: string) => Promise<import('../db/adapter.js'
 ## 6. エラーハンドリング・セキュリティ
 - `persona.target` 未解決・`db:` 未注入/0行・`url:` マッチ無しは当該 act/step を**明確な失敗 finding/step 失敗**に（フロー中断）。
 - DB パスワードは既存どおりログ/エラーに出さない（`createDbAdapter` 契約）。`dbQuery` は read-only 用途（SQL はシナリオ作者責任。秘密 env を `{{ENV}}` で渡せるがマスク対象）。
+- **信頼境界（重要）**：`db:` SQL は `{{VAR}}` を**文字列補間**して構築する（パラメータ化なし）。`{{VAR}}` には DOM/URL から capture したアプリ由来の値が入り得るため、**untrusted な capture 値を `db:` SQL に補間しないこと**（SQL インジェクション）。当面は「信頼できる内部 ID 等のみ」を運用ルールとし README に明記。将来オプション：`{{VAR}}` を `$1`/`?` プレースホルダに降格し `adapter.query(sql, params)` でパラメータ化（adapter は既に params 対応、Phase4 候補）。
 - 捕捉値・creds・PIN はマスク（Phase2 の vars マスク含む）。
 
 ---

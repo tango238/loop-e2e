@@ -284,7 +284,12 @@ export function buildDbQuery(
     if (!a) {
       const conf = config.databases.find((d) => d.name === connection)
       if (!conf) throw new Error(`db: capture references unknown connection '${connection}'`)
-      a = createAdapter(conf, dbSecrets[conf.passwordEnv] ?? '', drivers)
+      const pw = dbSecrets[conf.passwordEnv]
+      // env set-but-empty ('') is allowed (passwordless local DBs); only a missing env is an error.
+      if (conf.passwordEnv && pw === undefined) {
+        throw new Error(`db: connection '${connection}' password env '${conf.passwordEnv}' is not set`)
+      }
+      a = createAdapter(conf, pw ?? '', drivers)
       adapters.set(connection, a)
     }
     return a.query(sql, [])

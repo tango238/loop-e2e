@@ -241,6 +241,6 @@ describe('executeScenarios multi-target', () => {
     const bad: Scenario = { ...crossScn(), personas: [{ name: 'admin', target: 'ghost', auth: 'authenticated' }], acts: [{ persona: 'admin', steps: [{ action: 'navigate', target: '/x', expectedOutcome: 'o' }] }] }
     const findings = await executeScenarios(page, target, [bad], creds, { ensureAuthenticated: vi.fn(async () => ({ ok: true, detail: 'ok' })), executeSteps: vi.fn(), resolveTarget: () => undefined })
     expect(findings[0].severity).toBe('high')
-    expect(findings[0].detail).toMatch(/unknown target 'ghost'/)
+    expect(findings[0].detail).toMatch(/cannot use target 'ghost'/)
   })
 })
