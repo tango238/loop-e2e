@@ -17,6 +17,8 @@ export type PageLike = {
     fill: (value: string) => Promise<void>
     click: () => Promise<void>
     count?: () => Promise<number>
+    textContent?: () => Promise<string | null>
+    inputValue?: () => Promise<string>
   }
   /** Optional: close the page after capture to release resources */
   close?: () => Promise<void>
