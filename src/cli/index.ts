@@ -172,6 +172,7 @@ program
     ].filter(Boolean) as string[]
 
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
+    let runResult: { findingsWritten: boolean } = { findingsWritten: false }
     try {
       browserCtx = await launchBrowser()
       const launchedBrowser = browserCtx.browser
@@ -197,7 +198,7 @@ program
         return page
       }
 
-      await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
+      runResult = await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
         ctx: runContext,
         prepare,
         collect: (ctx, _deps) => collect(ctx, {
@@ -247,6 +248,10 @@ program
 
     // Aggregate into a report unless --no-report (then run `loop-e2e report` later).
     if (opts.report === false) {
+      if (!runResult.findingsWritten) {
+        process.stderr.write('run: FAILED to write findings to the store — nothing to aggregate later.\n')
+        process.exit(1)
+      }
       process.stdout.write('run: findings written to the store. Aggregate later with `loop-e2e report`.\n')
     } else {
       const { runReport } = await import('./commands/report.js')

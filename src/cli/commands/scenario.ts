@@ -43,6 +43,7 @@ export async function runScenario(
   opts: ScenarioOpts,
   deps: ScenarioDeps = {},
 ): Promise<void> {
+  const startedAt = new Date().toISOString()
   const { config, secrets } = await loadConfig(root)
 
   const llm =
@@ -97,7 +98,7 @@ export async function runScenario(
   // Record activity for the aggregated `report` (scenario generates scenarios, not findings).
   const runId = new Date().toISOString().replace(/[:.]/g, '-')
   await deps.appendActivity?.(root, {
-    source: 'scenario', runId, startedAt: runId,
+    source: 'scenario', runId, startedAt,
     summary: `generated ${scenarios.length} scenarios`,
   })
 

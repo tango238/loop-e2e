@@ -251,7 +251,7 @@ function resolveCredentials(
  * opts.skipPrepare is true. Prepare failures abort the run (propagate).
  * All external dependencies are injectable for deterministic testing.
  */
-export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promise<void> {
+export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promise<{ findingsWritten: boolean }> {
   const { collect, detectDiffs, runVerify, clock, ctx: injectedCtx, llm } = deps
   const runId = clock ? clock() : new Date().toISOString().replace(/[:.]/g, '-')
 
@@ -355,15 +355,24 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
   } catch (error) {
     logger.error({ error, runId }, 'baseline save failed')
   }
+  // findingsWritten gates the CLI's "written to the store" reassurance under --no-report: if the
+  // store write fails there, the findings exist nowhere, so the CLI must surface a hard error.
+  let findingsWritten = !deps.writeFindings // no store dep (tests) ⇒ treat as ok
   try {
     if (deps.writeFindings) {
       await deps.writeFindings(root, { source: 'run', runId, startedAt, diffFindings, verifyFindings })
+      findingsWritten = true
     }
+  } catch (error) {
+    logger.error({ error, runId }, 'findings store write failed')
+  }
+  try {
     if (deps.appendActivity) {
       const summary = `findings ${diffFindings.length + verifyFindings.length} (diff ${diffFindings.length}, verify ${verifyFindings.length})`
       await deps.appendActivity(root, { source: 'run', runId, startedAt, summary })
     }
   } catch (error) {
-    logger.error({ error, runId }, 'findings store write failed')
+    logger.error({ error, runId }, 'activity append failed')
   }
+  return { findingsWritten }
 }

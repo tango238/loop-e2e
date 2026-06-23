@@ -51,6 +51,7 @@ export async function runGrow(root: string, opts: RunGrowOpts, deps: RunGrowDeps
     ...Object.values(secrets.targetAuth),
   ].filter(Boolean)
 
+  const startedAt = new Date().toISOString()
   const result = await growFn(
     { config: growConfig, root, scenarioDir, target: envTarget, creds, skipPrepare: opts.skipPrepare },
     { ...deps, secrets: allSecrets, gitToken: secrets.githubToken },
@@ -59,7 +60,7 @@ export async function runGrow(root: string, opts: RunGrowOpts, deps: RunGrowDeps
   // Record activity for the aggregated `report` (grow produces scenarios, not findings).
   const runId = deps.clock ? deps.clock() : new Date().toISOString().replace(/[:.]/g, '-')
   await deps.appendActivity?.(root, {
-    source: 'grow', runId, startedAt: runId,
+    source: 'grow', runId, startedAt,
     summary: `proposed ${result.proposed.length} scenarios (discovered ${result.discovered}, uncovered ${result.uncovered})`,
   })
 

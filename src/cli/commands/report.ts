@@ -2,7 +2,7 @@ import { logger } from '../../util/logger.js'
 import type { Config } from '../../config/schema.js'
 import type { Secrets, RunContext, DiffFinding, VerifyFinding } from '../../domain/types.js'
 import type { RenderReportDeps } from '../../pipeline/report.js'
-import type { FindingsEntry, ActivityEntry } from '../../state/findings.js'
+import type { PendingFindings, ActivityEntry } from '../../state/findings.js'
 
 export type RunReportOpts = { target?: string }
 
@@ -16,9 +16,9 @@ export type RunReportResult = {
 
 export type RunReportDeps = {
   loadConfig: (cwd: string) => Promise<{ config: Config; secrets: Secrets }>
-  readPendingFindings: (root: string) => Promise<FindingsEntry[]>
+  readPendingFindings: (root: string) => Promise<PendingFindings[]>
   readPendingActivity: (root: string) => Promise<ActivityEntry[]>
-  archiveConsumed: (root: string, reportRunId: string) => Promise<void>
+  archiveConsumed: (root: string, reportRunId: string, consumedFiles?: string[]) => Promise<void>
   renderReport: (root: string, runId: string, deps: RenderReportDeps) => Promise<void>
   createLlm: (apiKey: string, models: Config['models'], opts?: { language?: string }) => import('../../services/llm/client.js').Llm
   createGithubClient: (token: string) => import('../../services/github/client.js').GithubClient
@@ -83,7 +83,8 @@ export async function runReport(cwd: string, opts: RunReportOpts, deps: RunRepor
     repo,
   })
 
-  await deps.archiveConsumed(cwd, reportRunId)
+  // Archive exactly the files we consumed (a producer that wrote during rendering stays pending).
+  await deps.archiveConsumed(cwd, reportRunId, entries.map((e) => e.file))
 
   return { reportRunId, findings: diffFindings.length + verifyFindings.length, sources, wrote: true }
 }

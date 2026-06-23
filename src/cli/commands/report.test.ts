@@ -14,8 +14,8 @@ const config = {
 const secrets = { db: {}, targetAuth: {}, anthropicApiKey: 'k', githubToken: '' }
 
 const vf = (title: string): VerifyFinding => ({ category: 'security', severity: 'medium', title, detail: 'd', evidence: 'e' })
-const entry = (source: 'run' | 'explore', titles: string[]): FindingsEntry => ({
-  source, runId: source, startedAt: 't', diffFindings: [], verifyFindings: titles.map(vf),
+const entry = (source: 'run' | 'explore', titles: string[]): FindingsEntry & { file: string } => ({
+  source, runId: source, startedAt: 't', diffFindings: [], verifyFindings: titles.map(vf), file: `${source}-x.json`,
 })
 
 function baseDeps(over: Partial<Parameters<typeof runReport>[2]> = {}) {
@@ -41,7 +41,8 @@ describe('runReport', () => {
     const [, , rdeps] = (deps.renderReport as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(rdeps.verifyFindings.map((f: VerifyFinding) => f.title)).toEqual(['a', 'b', 'c'])
     expect(rdeps.activity[0].summary).toBe('proposed 36')
-    expect(deps.archiveConsumed).toHaveBeenCalledWith('/cwd', 'report-run-1')
+    // archives exactly the consumed files (not a blind re-scan)
+    expect(deps.archiveConsumed).toHaveBeenCalledWith('/cwd', 'report-run-1', ['run-x.json', 'explore-x.json'])
     expect(res).toMatchObject({ wrote: true, findings: 3, sources: ['run', 'explore'] })
   })
 

@@ -70,6 +70,24 @@ describe('findings store', () => {
     await archiveConsumed(root, 'report-empty') // must not throw
     expect(await readPendingFindings(root)).toEqual([])
   })
+
+  it('gives each entry a unique filename so same-runId writes do not clobber', async () => {
+    await writeFindings(root, entry('run', 'same', ['a']))
+    await writeFindings(root, entry('run', 'same', ['b'])) // same source + runId
+    const pending = await readPendingFindings(root)
+    expect(pending.length).toBe(2)
+    expect(new Set(pending.map((p) => p.file)).size).toBe(2)
+  })
+
+  it('archives only the consumed files; a file written during reporting stays pending', async () => {
+    await writeFindings(root, entry('run', 'r1', ['a']))
+    const consumed = (await readPendingFindings(root)).map((p) => p.file)
+    // a new entry arrives after the read (simulating a concurrent producer)
+    await writeFindings(root, entry('explore', 'e1', ['b']))
+    await archiveConsumed(root, 'report-1', consumed)
+    const stillPending = await readPendingFindings(root)
+    expect(stillPending.map((p) => p.source)).toEqual(['explore'])
+  })
 })
 
 // Helper to read the raw activity file content for the malformed-line test.
