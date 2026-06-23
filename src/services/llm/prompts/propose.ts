@@ -5,14 +5,18 @@ import type { PageInfo } from '../../../domain/types.js'
  * pages discovered AFTER login that no existing scenario covers. The caller is
  * already authenticated, so each scenario starts by navigating to the page.
  */
-export function buildProposePrompt(pages: PageInfo[]): string {
+export function buildProposePrompt(pages: PageInfo[], requirementsSummary = ''): string {
   const sections = pages.map(buildPageSection).join('\n\n')
+  const sourceBlock = requirementsSummary
+    ? `\n\n--- RELEVANT SOURCE / REQUIREMENTS CONTEXT (for richer, more functional scenarios) ---\n\n${requirementsSummary}\n`
+    : ''
 
   return `You are an expert QA engineer. The user is ALREADY LOGGED IN to an admin
 application. Below are pages that were discovered by crawling the app after login
 and which no existing test scenario covers yet. Propose one end-to-end test
 scenario per page that exercises that page's primary purpose (viewing its key
-data and/or performing its main action).
+data and/or performing its main action). Use the source/requirements context (if
+provided) to make the scenarios reflect real business flows.
 
 Each scenario must be a JSON object with this exact structure:
 {
@@ -39,7 +43,7 @@ Rules:
 --- DISCOVERED PAGES ---
 
 ${sections}
-
+${sourceBlock}
 --- END ---
 
 Respond with a JSON array of scenario objects.`

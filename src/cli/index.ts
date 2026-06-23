@@ -90,11 +90,38 @@ program
 
 program
   .command('scenario')
-  .description('Generate E2E test scenarios from repository requirements using AI')
+  .description('[deprecated] Alias of `grow --source-only` — propose scenarios from repository source')
   .option('--from <paths...>', 'Additional requirement files to merge into context')
   .action(async (opts: { from?: string[] }) => {
+    const cwd = process.cwd()
+    const { runGrow } = await import('./commands/grow.js')
+    const { prepare } = await import('../pipeline/prepare.js')
+    const { authenticate } = await import('../services/browser/login.js')
+    const { discoverPages } = await import('../services/browser/discover.js')
+    const { findUncoveredPages } = await import('../services/grow/coverage.js')
+    const { proposeScenarios } = await import('../services/llm/proposeScenarios.js')
+    const { collectRequirements } = await import('../services/repo/reader.js')
+    const { loadScenarios, saveProposedScenario } = await import('../scenario/schema.js')
     const { appendActivity } = await import('../state/findings.js')
-    await runScenario(process.cwd(), { from: opts.from }, { appendActivity })
+    const loaded = await loadConfig(cwd)
+    const llm = createLlm(loaded.secrets.anthropicApiKey, loaded.config.models, { language: loaded.config.language })
+    await runScenario(cwd, { from: opts.from }, {
+      growDeps: {
+        prepare,
+        // --source-only never crawls, so createPage is never invoked.
+        createPage: () => Promise.reject(new Error('createPage is not available in --source-only')),
+        authenticate,
+        discoverPages,
+        findUncoveredPages,
+        proposeScenarios,
+        collectRequirements,
+        loadScenarios,
+        saveProposedScenario,
+        llm,
+        pinRunner: defaultComposeRunner,
+        appendActivity,
+      },
+    })
   })
 
 program
@@ -304,11 +331,13 @@ program
 
 program
   .command('grow')
-  .description('Discover post-login pages and propose new scenarios (proposed drafts)')
+  .description('Understand the app (live crawl + repository source) and propose new scenarios (proposed drafts)')
   .option('--target <name>', 'Target name to run against')
   .option('--max-pages <n>', 'Max pages to discover', (v) => parseInt(v, 10))
   .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
-  .action(async (opts: { target?: string; maxPages?: number; skipPrepare?: boolean }) => {
+  .option('--source-only', 'Use only repository source/requirements (no live crawl)')
+  .option('--crawl-only', 'Use only the live crawl (no source/requirements)')
+  .action(async (opts: { target?: string; maxPages?: number; skipPrepare?: boolean; sourceOnly?: boolean; crawlOnly?: boolean }) => {
     const cwd = process.cwd()
 
     let config: import('../config/schema.js').Config
@@ -329,24 +358,26 @@ program
     const { discoverPages } = await import('../services/browser/discover.js')
     const { findUncoveredPages } = await import('../services/grow/coverage.js')
     const { proposeScenarios } = await import('../services/llm/proposeScenarios.js')
+    const { collectRequirements } = await import('../services/repo/reader.js')
     const { loadScenarios, saveProposedScenario } = await import('../scenario/schema.js')
     const { prepare } = await import('../pipeline/prepare.js')
     const { appendActivity } = await import('../state/findings.js')
 
+    // --source-only never crawls, so no browser is launched.
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
     try {
-      browserCtx = await launchBrowser()
-      const browser = browserCtx.browser
+      const browser = opts.sourceOnly ? null : (browserCtx = await launchBrowser()).browser
       const result = await runGrow(
         cwd,
-        { target: opts.target, maxPages: opts.maxPages, skipPrepare: opts.skipPrepare },
+        { target: opts.target, maxPages: opts.maxPages, skipPrepare: opts.skipPrepare, sourceOnly: opts.sourceOnly, crawlOnly: opts.crawlOnly },
         {
           prepare,
-          createPage: () => browser.newPage(),
+          createPage: () => (browser ? browser.newPage() : Promise.reject(new Error('createPage is not available in --source-only'))),
           authenticate,
           discoverPages,
           findUncoveredPages,
           proposeScenarios,
+          collectRequirements,
           loadScenarios,
           saveProposedScenario,
           llm,
@@ -355,10 +386,13 @@ program
         },
       )
       process.stdout.write(
-        `grow: discovered ${result.discovered} pages, ${result.uncovered} uncovered; ` +
-          `proposed ${result.proposed.length} scenarios → ${config.scenarioDir}/proposed/\n` +
+        `grow(${result.mode}): discovered ${result.discovered} / uncovered ${result.uncovered} / ` +
+          `source-repos ${result.requirementsRepos} → proposed ${result.proposed.length} → ${config.scenarioDir}/proposed/\n` +
           `Review with 'loop-e2e approve --all' (or per id) to adopt them.\n`,
       )
+      if (result.sourceError) {
+        process.stderr.write('grow: WARNING — source/requirement collection failed; proposals are crawl-only this run.\n')
+      }
     } catch (err) {
       process.stderr.write(`grow failed: ${err instanceof Error ? err.message : String(err)}\n`)
       process.exit(1)

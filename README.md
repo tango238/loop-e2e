@@ -34,12 +34,14 @@ loop-e2e feedback --run <runId> --finding 0 --comment "False positive — token 
 
 Scaffolds `.loop-e2e.yaml` (project config) and `.loop-e2e/` (state directory) in the current working directory. Prompts interactively for target URL, GitHub repo, and database connection.
 
-### `scenario`
+### `scenario` *(deprecated — alias of `grow --source-only`)*
 
-Reads your repository source code and requirement files, then uses Claude to generate `*.scenario.yaml` files in the configured `scenarioDir`. Pass `--from <file...>` to merge additional requirement files.
+`scenario` now runs `grow --source-only`: it proposes scenarios from repository source/requirements
+(no live crawl). Pass `--from <file...>` to merge additional requirement files. Output goes to
+`<scenarioDir>/proposed/` as **drafts** — adopt them with `loop-e2e approve`. Prefer `grow --source-only`.
 
 ```sh
-loop-e2e scenario --from docs/requirements.md docs/api.md
+loop-e2e scenario --from docs/requirements.md docs/api.md   # == grow --source-only --from ...
 ```
 
 ### `run`
@@ -186,32 +188,38 @@ Options:
 | `--scenario <id>` | Scenario ID to update on valid feedback |
 | `--scenario-dir <dir>` | Scenario directory (default: `<cwd>/scenarios`) |
 
-### `grow`
+### `grow` — アプリ理解 → シナリオ提案（統合）
 
-Grows your scenario suite by exploring the app **after login**: it authenticates
-(including 2FA), crawls in-app links to discover pages, finds pages no existing
-scenario covers, and asks the LLM (Opus) to propose scenarios for them. Proposals
-are saved as drafts under `<scenarioDir>/proposed/` and are **not** run until you
-approve them.
+`grow` は **実機クロール（動的）** と **リポジトリのソース/要件/git ログ（静的）** の両方からアプリ
+を理解し、未カバーの検証シナリオを提案します。提案は `<scenarioDir>/proposed/` の**ドラフト**として
+保存され、`loop-e2e approve` で採用 → `run` で実行・確認します（提案=仮説、確認結果が SSOT）。
+
+- 動的：認証（2FA込み）→ ログイン後のページ/フォーム/遷移を BFS クロール → 未カバー判定
+- 静的：設定リポジトリのコード/要件/直近 git ログを収集
+- 提案：未カバーページ＋ソース要約を融合して Opus がシナリオ提案（バッチ・部分失敗分離）
 
 ```sh
-loop-e2e grow                 # discover + propose for the first target
+loop-e2e grow                 # 既定：ソース＋クロール
+loop-e2e grow --source-only   # ソースのみ（実機・認証不要）＝ 旧 scenario
+loop-e2e grow --crawl-only    # クロールのみ ＝ 旧 grow
 loop-e2e grow --target admin --max-pages 30
-loop-e2e grow --skip-prepare  # skip repo refresh + setup hooks
+loop-e2e grow --skip-prepare
 ```
-
-Flow: `prepare → authenticate (form login + 2FA) → discover (BFS) → find uncovered → propose → save drafts`.
-
-Options:
 
 | Flag | Description |
 |------|-------------|
-| `--target <name>` | Target to crawl (default: first target) |
-| `--max-pages <n>` | Cap on discovered pages (overrides `grow.maxPages`) |
-| `--skip-prepare` | Skip the pre-run prepare phase |
+| `--target <name>` | 対象ターゲット（default: 先頭） |
+| `--max-pages <n>` | クロール最大ページ数（`grow.maxPages` を上書き） |
+| `--source-only` | ソース/要件のみ（クロールしない・認証不要） |
+| `--crawl-only` | クロールのみ（ソースを使わない） |
+| `--skip-prepare` | prepare 省略 |
 
-`grow` requires `ANTHROPIC_API_KEY` (it uses the LLM to propose), and the login scenario's
-`twoFactor.pinCommand` if the app has 2FA (see [2FA](#2fa--owned-by-the-login-scenario-not-config)).
+`grow` は `ANTHROPIC_API_KEY` を必要とし、クロール時はログインシナリオの
+`twoFactor.pinCommand`（2FA がある場合、[2FA](#2fa--owned-by-the-login-scenario-not-config) 参照）を使います。
+
+> **移行**: `scenario` は `grow --source-only` の**非推奨エイリアス**です。従来 `scenario` は
+> `scenarios/` に直接保存していましたが、統合後は **`proposed/` に保存**され、採用には
+> `loop-e2e approve` が必要です（提案 → 承認 → 確認の一貫フロー）。
 
 ### `approve`
 

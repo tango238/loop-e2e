@@ -1,134 +1,28 @@
-import { loadConfig } from '../../config/load.js'
-import { createLlm } from '../../services/llm/client.js'
-import { collectRequirements } from '../../services/repo/reader.js'
-import { generateScenarios } from '../../services/llm/scenarioGen.js'
-import { loadScenarios, saveScenario, type Scenario } from '../../scenario/schema.js'
-import { logger } from '../../util/logger.js'
-import type { Llm } from '../../services/llm/client.js'
-import type { GitLogRunner } from '../../services/repo/gitlog.js'
-import type { RequirementContext } from '../../services/repo/reader.js'
-import type { AuthHint } from '../../services/llm/prompts/scenario.js'
+import { runGrow as defaultRunGrow, type RunGrowDeps, type RunGrowOpts } from './grow.js'
 
 export type ScenarioOpts = {
-  /** Additional requirement files to merge (--from flag) */
+  /** Additional requirement files to merge (--from flag) → forwarded as grow's source fromPaths */
   from?: string[]
 }
 
-/** Injectable dependencies for scenario command — makes the command testable. */
+/** Injectable dependencies for the (deprecated) scenario alias — makes it testable. */
 export type ScenarioDeps = {
-  llm?: Llm
-  gitLogRunner?: GitLogRunner
-  /** Injected for tests; defaults to stdin confirm */
-  confirm?: (message: string) => Promise<boolean>
-  /** Override collectRequirements for testing */
-  collectRequirements?: (
-    repos: import('../../config/schema.js').Config['repositories'],
-    deps: Parameters<typeof collectRequirements>[1],
-  ) => Promise<RequirementContext[]>
-  /** Override generateScenarios for testing */
-  generateScenarios?: (llm: Llm, contexts: RequirementContext[], authHint?: AuthHint) => Promise<Scenario[]>
-  /** Record an activity line for the aggregated report (injected; omitted in tests = no-op). */
-  appendActivity?: (root: string, entry: import('../../state/findings.js').ActivityEntry) => Promise<void>
+  /** Injectable for tests */
+  runGrow?: (root: string, opts: RunGrowOpts, deps: RunGrowDeps) => Promise<unknown>
+  /** Deprecation-warning sink (defaults to stderr) */
+  warn?: (msg: string) => void
+  /** Real grow deps forwarded to runGrow (browser/llm/repo wiring) */
+  growDeps?: Partial<RunGrowDeps>
 }
 
 /**
- * Run the `scenario` command:
- * 1. Load config + secrets.
- * 2. Collect requirements from each repo (clone cache → select → summarize + git log).
- * 3. Call Opus to generate scenarios.
- * 4. For each generated scenario, either save (new) or show diff and confirm (existing).
+ * @deprecated `scenario` is now an alias of `grow --source-only`. It generates scenarios from
+ * repository source/requirements (no live crawl) and saves them as `proposed/` drafts (use
+ * `loop-e2e approve` to adopt). Prefer `loop-e2e grow --source-only`.
  */
-export async function runScenario(
-  root: string,
-  opts: ScenarioOpts,
-  deps: ScenarioDeps = {},
-): Promise<void> {
-  const startedAt = new Date().toISOString()
-  const { config, secrets } = await loadConfig(root)
-
-  const llm =
-    deps.llm ?? createLlm(secrets.anthropicApiKey, config.models, { language: config.language })
-
-  const collect = deps.collectRequirements ?? collectRequirements
-  const generate = deps.generateScenarios ?? generateScenarios
-  const confirm = deps.confirm ?? defaultConfirm
-
-  const contexts = await collect(config.repositories, {
-    llm,
-    token: secrets.githubToken,
-    root,
-    ingestion: config.ingestion,
-    fromPaths: opts.from,
-    gitLogRunner: deps.gitLogRunner,
-  })
-
-  // Build auth hint from the first configured target (structural info only — no cred values)
-  const firstTarget = config.targets[0]
-  const authHint: AuthHint | undefined = firstTarget?.auth?.loginPath
-    ? { loginPath: firstTarget.auth.loginPath }
-    : undefined
-
-  const scenarios = await generate(llm, contexts, authHint)
-  logger.info({ count: scenarios.length }, 'Scenarios ready — saving')
-
-  const existing = await loadScenarios(config.scenarioDir)
-  const existingById = new Map(existing.map((s) => [s.id, s]))
-
-  for (const scenario of scenarios) {
-    const loadedPrev = existingById.get(scenario.id)
-    if (loadedPrev) {
-      // Compare persisted content only — strip the runtime-only scriptDir off the loaded scenario.
-      const { scriptDir: _scriptDir, ...prev } = loadedPrev
-      const changed = JSON.stringify(prev) !== JSON.stringify(scenario)
-      if (!changed) {
-        logger.info({ id: scenario.id }, 'Scenario unchanged — skipping')
-        continue
-      }
-      const diff = buildDiff(prev, scenario)
-      const ok = await confirm(`Scenario ${scenario.id} already exists. Overwrite?\n\n${diff}`)
-      if (!ok) {
-        logger.info({ id: scenario.id }, 'Scenario overwrite skipped by user')
-        continue
-      }
-    }
-    await saveScenario(config.scenarioDir, scenario)
-    logger.info({ id: scenario.id }, 'Scenario saved')
-  }
-
-  // Record activity for the aggregated `report` (scenario generates scenarios, not findings).
-  const runId = new Date().toISOString().replace(/[:.]/g, '-')
-  await deps.appendActivity?.(root, {
-    source: 'scenario', runId, startedAt,
-    summary: `generated ${scenarios.length} scenarios`,
-  })
-
-  logger.info('scenario command complete')
-}
-
-// NOTE: positional/line-by-line diff — may be misleading when array elements shift position.
-function buildDiff(prev: Scenario, next: Scenario): string {
-  const prevJson = JSON.stringify(prev, null, 2)
-  const nextJson = JSON.stringify(next, null, 2)
-  const prevLines = prevJson.split('\n')
-  const nextLines = nextJson.split('\n')
-  const maxLen = Math.max(prevLines.length, nextLines.length)
-  const diffLines: string[] = []
-  for (let i = 0; i < maxLen; i++) {
-    const p = prevLines[i] ?? ''
-    const n = nextLines[i] ?? ''
-    if (p !== n) {
-      if (p) diffLines.push(`- ${p}`)
-      if (n) diffLines.push(`+ ${n}`)
-    }
-  }
-  return diffLines.length > 0 ? diffLines.join('\n') : '(no textual diff found)'
-}
-
-async function defaultConfirm(message: string): Promise<boolean> {
-  process.stdout.write(`${message}\n[y/N] `)
-  return new Promise((resolve) => {
-    process.stdin.once('data', (d) => {
-      resolve(d.toString().trim().toLowerCase() === 'y')
-    })
-  })
+export async function runScenario(root: string, opts: ScenarioOpts, deps: ScenarioDeps = {}): Promise<void> {
+  const runGrow = deps.runGrow ?? defaultRunGrow
+  const warn = deps.warn ?? ((m: string) => process.stderr.write(`${m}\n`))
+  warn('`scenario` is deprecated — it now runs `grow --source-only`. Use `loop-e2e grow --source-only`.')
+  await runGrow(root, { sourceOnly: true, fromPaths: opts.from }, (deps.growDeps ?? {}) as RunGrowDeps)
 }

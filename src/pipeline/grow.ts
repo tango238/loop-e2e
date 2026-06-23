@@ -3,6 +3,9 @@ import type { Config } from '../config/schema.js'
 import type { TargetEnv, RawPage } from '../domain/types.js'
 import type { Scenario, LoadedScenario, ScenarioTwoFactor } from '../scenario/schema.js'
 import { findLoginScenario } from '../scenario/loginScenario.js'
+import type { ProposeInput } from '../services/llm/proposeScenarios.js'
+import type { RequirementContext } from '../services/repo/reader.js'
+import type { AuthHint } from '../services/llm/prompts/scenario.js'
 import type { Llm } from '../services/llm/client.js'
 import type { PageLike } from '../services/browser/crawler.js'
 import type { ComposeRunner } from '../services/compose/compose.js'
@@ -15,6 +18,12 @@ export type GrowArgs = {
   target: TargetEnv
   creds: { username: string; password: string }
   skipPrepare?: boolean
+  /** Use only repository source/requirements (no live crawl/auth). */
+  sourceOnly?: boolean
+  /** Use only the live crawl (no source/requirements). */
+  crawlOnly?: boolean
+  /** Extra requirement files (from `--from`) merged into source context. */
+  fromPaths?: string[]
 }
 
 export type GrowDeps = {
@@ -28,7 +37,11 @@ export type GrowDeps = {
   ) => Promise<LoginResult>
   discoverPages: (page: PageLike, target: TargetEnv, opts: Config['grow'] & object) => Promise<RawPage[]>
   findUncoveredPages: (discovered: RawPage[], scenarios: Scenario[]) => RawPage[]
-  proposeScenarios: (llm: Llm, uncovered: RawPage[]) => Promise<Scenario[]>
+  proposeScenarios: (llm: Llm, input: ProposeInput) => Promise<Scenario[]>
+  collectRequirements: (
+    repos: Config['repositories'],
+    deps: { llm: Llm; token: string; root: string; ingestion: Config['ingestion']; fromPaths?: string[] },
+  ) => Promise<RequirementContext[]>
   loadScenarios: (dir: string) => Promise<LoadedScenario[]>
   saveProposedScenario: (dir: string, scenario: Scenario) => Promise<void>
   llm: Llm
@@ -37,7 +50,16 @@ export type GrowDeps = {
   gitToken?: string
 }
 
-export type GrowResult = { discovered: number; uncovered: number; proposed: Scenario[] }
+export type GrowResult = {
+  discovered: number
+  uncovered: number
+  proposed: Scenario[]
+  mode: 'full' | 'source' | 'crawl'
+  requirementsRepos: number
+  /** True when source/requirement collection threw and was degraded to empty (distinguishes a
+   * genuine "nothing to propose" from "the static understanding source silently collapsed"). */
+  sourceError: boolean
+}
 
 const DEFAULT_GROW = { maxPages: 50, maxDepth: 3, excludePaths: [] as string[] }
 
@@ -49,6 +71,9 @@ const DEFAULT_GROW = { maxPages: 50, maxDepth: 3, excludePaths: [] as string[] }
  */
 export async function grow(args: GrowArgs, deps: GrowDeps): Promise<GrowResult> {
   const { config, root, scenarioDir, target, creds } = args
+  const sourceOnly = Boolean(args.sourceOnly)
+  const crawlOnly = Boolean(args.crawlOnly)
+  const mode: GrowResult['mode'] = sourceOnly ? 'source' : crawlOnly ? 'crawl' : 'full'
 
   if (!args.skipPrepare && deps.prepare) {
     logger.info({ root }, 'grow: prepare phase starting')
@@ -56,32 +81,66 @@ export async function grow(args: GrowArgs, deps: GrowDeps): Promise<GrowResult> 
     logger.info({ root }, 'grow: prepare phase complete')
   }
 
-  const page = await deps.createPage()
-
-  // Load scenarios first so the designated login scenario can supply 2FA (pinCommand + scriptDir).
+  // Load scenarios first: used for coverage (uncovered pages), id-collision avoidance, and the
+  // designated login scenario's 2FA (pinCommand + scriptDir).
   const existing = await deps.loadScenarios(scenarioDir)
-  const login = findLoginScenario(existing, target.auth?.loginPath)
 
-  logger.info({ target: target.name }, 'grow: authenticating')
-  const auth = await deps.authenticate(page, target, creds, {
-    pinRunner: deps.pinRunner,
-    secrets: deps.secrets,
-    twoFactor: login?.twoFactor,
-    scriptDir: login?.scriptDir,
-  })
-  if (!auth.ok) {
-    throw new Error(`grow: authentication failed: ${auth.detail}`)
+  // --- static understanding (source / requirements) ---
+  let requirements: RequirementContext[] = []
+  let sourceError = false
+  if (!crawlOnly) {
+    try {
+      requirements = await deps.collectRequirements(config.repositories, {
+        llm: deps.llm,
+        token: deps.gitToken ?? '',
+        root,
+        ingestion: config.ingestion,
+        fromPaths: args.fromPaths,
+      })
+    } catch (err) {
+      sourceError = true
+      logger.warn({ err: String(err) }, 'grow: requirement collection failed — continuing without source context')
+    }
   }
 
-  const discovered = await deps.discoverPages(page, target, config.grow ?? DEFAULT_GROW)
-  const uncovered = deps.findUncoveredPages(discovered, existing)
-  logger.info({ discovered: discovered.length, uncovered: uncovered.length }, 'grow: coverage analyzed')
+  // --- dynamic understanding (crawl) ---
+  let uncovered: RawPage[] = []
+  let discoveredCount = 0
+  if (!sourceOnly) {
+    const page = await deps.createPage()
+    const login = findLoginScenario(existing, target.auth?.loginPath)
+    logger.info({ target: target.name }, 'grow: authenticating')
+    const auth = await deps.authenticate(page, target, creds, {
+      pinRunner: deps.pinRunner,
+      secrets: deps.secrets,
+      twoFactor: login?.twoFactor,
+      scriptDir: login?.scriptDir,
+    })
+    if (!auth.ok) {
+      throw new Error(`grow: authentication failed: ${auth.detail}`)
+    }
+    const discovered = await deps.discoverPages(page, target, config.grow ?? DEFAULT_GROW)
+    discoveredCount = discovered.length
+    uncovered = deps.findUncoveredPages(discovered, existing)
+    logger.info({ discovered: discovered.length, uncovered: uncovered.length }, 'grow: coverage analyzed')
+  }
 
-  const proposed = await deps.proposeScenarios(deps.llm, uncovered)
-  for (const scenario of proposed) {
+  // --- unified proposal (fuse crawl + source) ---
+  const authHint: AuthHint | undefined = target.auth?.loginPath ? { loginPath: target.auth.loginPath } : undefined
+  const proposed = await deps.proposeScenarios(deps.llm, { uncovered, requirements, authHint })
+
+  const existingIds = new Set(existing.map((s) => s.id))
+  const fresh = proposed.filter((s) => !existingIds.has(s.id))
+  for (const scenario of fresh) {
     await deps.saveProposedScenario(scenarioDir, scenario)
   }
-  logger.info({ proposed: proposed.length }, 'grow: proposed scenarios saved')
+  logger.info({ proposed: fresh.length, mode }, 'grow: proposed scenarios saved')
 
-  return { discovered: discovered.length, uncovered: uncovered.length, proposed }
+  // Distinguish "fully covered" from "both understanding sources collapsed".
+  if (fresh.length === 0 && (sourceError || (mode === 'full' && requirements.length === 0 && uncovered.length === 0))) {
+    logger.warn({ mode, sourceError, requirementsRepos: requirements.length, uncovered: uncovered.length },
+      'grow: 0 scenarios proposed — verify this means full coverage, not failed understanding (source/crawl)')
+  }
+
+  return { discovered: discoveredCount, uncovered: uncovered.length, proposed: fresh, mode, requirementsRepos: requirements.length, sourceError }
 }

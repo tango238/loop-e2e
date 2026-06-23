@@ -15,10 +15,10 @@ import type { CollectResult } from '../../src/pipeline/collect.js'
 import type { DiffFinding, VerifyFinding, RawPage, SiteStructure, PriorState } from '../../src/domain/types.js'
 import type { Scenario } from '../../src/scenario/schema.js'
 import { runInit, type InitDeps } from '../../src/cli/commands/init.js'
-import { runScenario, type ScenarioDeps } from '../../src/cli/commands/scenario.js'
+import { runScenario } from '../../src/cli/commands/scenario.js'
 import { runRun } from '../../src/cli/commands/run.js'
 import { runFeedback } from '../../src/cli/commands/feedback.js'
-import { saveScenario, loadScenarios } from '../../src/scenario/schema.js'
+import { saveScenario, loadScenarios, saveProposedScenario, loadProposedScenarios, approveScenario } from '../../src/scenario/schema.js'
 import { loadFeedback, loadKnownFindings, saveBaseline } from '../../src/state/store.js'
 import { statePaths } from '../../src/state/paths.js'
 import { writeYaml, ensureDir } from '../../src/util/fs.js'
@@ -175,13 +175,17 @@ describe('integration: init → scenario → run → feedback', () => {
     process.env['GITHUB_TOKEN'] = 'test-token'
     try {
       const generatedScenario = makeScenario('sc-four-cmd')
-      const scenarioDeps: ScenarioDeps = {
-        llm: makeLlm(),
-        collectRequirements: vi.fn().mockResolvedValue([]),
-        generateScenarios: vi.fn().mockResolvedValue([generatedScenario]),
-        confirm: vi.fn().mockResolvedValue(true),
-      }
-      await runScenario(root, {}, scenarioDeps)
+      // scenario is now `grow --source-only`: it proposes drafts into proposed/ (no live crawl).
+      await runScenario(root, {}, {
+        warn: vi.fn(),
+        growDeps: {
+          collectRequirements: vi.fn().mockResolvedValue([]),
+          proposeScenarios: vi.fn().mockResolvedValue([generatedScenario]),
+          loadScenarios,
+          saveProposedScenario,
+          llm: makeLlm(),
+        },
+      })
     } finally {
       if (origAnthropicKey === undefined) {
         delete process.env['ANTHROPIC_API_KEY']
@@ -195,7 +199,11 @@ describe('integration: init → scenario → run → feedback', () => {
       }
     }
 
-    // Scenario file must exist
+    // Proposed draft must exist; approve it to make it active for run.
+    const proposed = await loadProposedScenarios(scenarioDir)
+    expect(proposed).toHaveLength(1)
+    expect(proposed[0]?.id).toBe('sc-four-cmd')
+    await approveScenario(scenarioDir, 'sc-four-cmd')
     const savedScenarios = await loadScenarios(scenarioDir)
     expect(savedScenarios).toHaveLength(1)
     expect(savedScenarios[0]?.id).toBe('sc-four-cmd')
