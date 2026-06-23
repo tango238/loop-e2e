@@ -412,7 +412,8 @@ program
   .option('--screen <path...>', 'Screen path(s) to explore (repeatable)')
   .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
   .option('--no-reseed', 'Do not re-seed the database after the run (skips the dev-guard)')
-  .action(async (opts: { target?: string; screen?: string[]; skipPrepare?: boolean; reseed?: boolean }) => {
+  .option('--no-report', 'Write findings to the store only; aggregate later with `loop-e2e report`')
+  .action(async (opts: { target?: string; screen?: string[]; skipPrepare?: boolean; reseed?: boolean; report?: boolean }) => {
     const cwd = process.cwd()
     const { runExplore } = await import('./commands/explore.js')
     const { explore } = await import('../pipeline/explore.js')
@@ -436,8 +437,20 @@ program
       process.stdout.write(
         `explore: forms ${result.forms} / cases ${result.cases} / ` +
           `gaps ${result.gapsHigh + result.gapsMedium} (high ${result.gapsHigh}/medium ${result.gapsMedium}) / ` +
-          `message-issues ${result.messageIssues} → report .loop-e2e/reports/\n`,
+          `message-issues ${result.messageIssues}\n`,
       )
+      // Aggregate into a report unless --no-report (then run `loop-e2e report` later).
+      if (opts.report === false) {
+        process.stdout.write('explore: findings written to the store. Aggregate later with `loop-e2e report`.\n')
+      } else {
+        const { runReport } = await import('./commands/report.js')
+        const { renderReport } = await import('../pipeline/report.js')
+        const { readPendingFindings, readPendingActivity, archiveConsumed } = await import('../state/findings.js')
+        const r = await runReport(cwd, { target: opts.target }, {
+          loadConfig, readPendingFindings, readPendingActivity, archiveConsumed, renderReport, createLlm, createGithubClient,
+        })
+        if (r.wrote) process.stdout.write(`explore: report written → .loop-e2e/reports/${r.reportRunId}/\n`)
+      }
     } catch (err) {
       process.stderr.write(`explore failed: ${err instanceof Error ? err.message : String(err)}\n`)
       process.exit(1)

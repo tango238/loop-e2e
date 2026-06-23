@@ -27,7 +27,7 @@ function fakePage(): PageLike {
 }
 
 function baseDeps(overrides: Partial<ExploreDeps> = {}): ExploreDeps {
-  const writeReport = vi.fn(async () => {})
+  const writeFindings = vi.fn(async () => {})
   const seedDatabase = vi.fn(async () => {})
   return {
     target: { name: 't', baseUrl: 'http://app', auth: { strategy: 'form', loginPath: '/login' } },
@@ -47,8 +47,7 @@ function baseDeps(overrides: Partial<ExploreDeps> = {}): ExploreDeps {
     classifyErrorQuality: async () => [],
     wasValueSaved: async () => true,
     llm: {} as ExploreDeps['llm'],
-    writeReport,
-    reportDeps: {} as ExploreDeps['reportDeps'],
+    writeFindings,
     seedDatabase,
     ...overrides,
   }
@@ -60,7 +59,7 @@ describe('explore pipeline', () => {
     const res = await explore('/root', { screens: ['/user/create'] }, deps)
     expect(res.gapsHigh).toBe(1)
     expect(res.findings.some((f) => f.category === 'input-validation' && f.severity === 'high')).toBe(true)
-    expect(deps.writeReport).toHaveBeenCalledOnce()
+    expect(deps.writeFindings).toHaveBeenCalledOnce()
     expect(deps.seedDatabase).toHaveBeenCalledOnce()
   })
 
@@ -72,7 +71,7 @@ describe('explore pipeline', () => {
     })
     await expect(explore('/root', { screens: ['/user/create'] }, deps)).rejects.toThrow(/auth/i)
     expect(runCase).not.toHaveBeenCalled()
-    expect(deps.writeReport).not.toHaveBeenCalled()
+    expect(deps.writeFindings).not.toHaveBeenCalled()
     expect(deps.seedDatabase).not.toHaveBeenCalled()
   })
 
@@ -99,7 +98,7 @@ describe('explore pipeline', () => {
     const res = await explore('/root', { screens: ['/user/create'] }, deps)
     expect(res.forms).toBe(1)
     expect(res.cases).toBe(0)
-    expect(deps.writeReport).toHaveBeenCalledOnce()
+    expect(deps.writeFindings).toHaveBeenCalledOnce()
     expect(deps.seedDatabase).toHaveBeenCalledOnce()
   })
 })

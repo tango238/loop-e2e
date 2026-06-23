@@ -1,10 +1,10 @@
 import { logger } from '../util/logger.js'
-import type { TargetEnv, VerifyFinding, SiteStructure } from '../domain/types.js'
+import type { TargetEnv, VerifyFinding } from '../domain/types.js'
 import type { PageLike } from '../services/browser/crawler.js'
 import type { DbAdapter } from '../services/db/adapter.js'
 import type { Llm } from '../services/llm/client.js'
 import type { Config } from '../config/schema.js'
-import type { WriteReportDeps } from './report.js'
+import type { FindingsEntry, ActivityEntry } from '../state/findings.js'
 import type { LoginResult } from '../services/browser/login.js'
 import type {
   DiscoveredForm, ColumnDef, FieldConstraint, InputCase, CaseOutcome, Baseline, GapVerdict, QualityFinding,
@@ -51,16 +51,14 @@ export type ExploreDeps = {
   sourceRules?: string
   execDeps?: ExploreExecDeps
 
-  writeReport: (root: string, runId: string, deps: WriteReportDeps) => Promise<void>
-  reportDeps: Omit<WriteReportDeps, 'verifyFindings' | 'diffFindings' | 'currentStructure'>
+  /** Persist findings to the shared store (the `report` command aggregates them) */
+  writeFindings: (root: string, entry: FindingsEntry) => Promise<void>
+  appendActivity?: (root: string, entry: ActivityEntry) => Promise<void>
   prepare?: (config: Config, root: string, deps: { secrets: string[]; gitToken: string }) => Promise<void>
   seedDatabase: (seed: { command: string }, root: string, secrets: string[]) => Promise<void>
   runId?: string
 }
 
-function emptyStructure(): SiteStructure {
-  return { generatedAt: new Date().toISOString(), pages: [], transitions: [] }
-}
 
 function gapFinding(form: DiscoveredForm, c: InputCase, v: GapVerdict): VerifyFinding {
   return {
@@ -177,13 +175,15 @@ export async function explore(root: string, opts: ExploreOpts, deps: ExploreDeps
       }
     }
 
-    // Stage 3: report.
-    await deps.writeReport(root, runId, {
-      ...deps.reportDeps,
-      verifyFindings: findings,
-      diffFindings: [],
-      currentStructure: emptyStructure(),
-    })
+    // Stage 3: persist findings to the shared store (reporting is the separate `report` step).
+    const startedAt = new Date().toISOString()
+    await deps.writeFindings(root, { source: 'explore', runId, startedAt, diffFindings: [], verifyFindings: findings })
+    if (deps.appendActivity) {
+      await deps.appendActivity(root, {
+        source: 'explore', runId, startedAt,
+        summary: `forms ${forms.length}, cases ${cases}, gaps ${gapsHigh + gapsMedium} (high ${gapsHigh}/medium ${gapsMedium}), message-issues ${messageIssues}`,
+      })
+    }
 
     // Stage 4: re-seed to restore the DB.
     if (!opts.noReseed && deps.seed) {

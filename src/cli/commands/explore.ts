@@ -57,9 +57,6 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
   const dbType: 'postgres' | 'mysql' = (dbConf?.type as 'postgres' | 'mysql') ?? 'postgres'
   const db = dbConf ? deps.createDbAdapter(dbConf, secrets.db[dbConf.passwordEnv] ?? '') : undefined
 
-  const githubClient = secrets.githubToken ? deps.createGithubClient(secrets.githubToken) : null
-  const repoUrl = config.repositories[0]?.url
-
   // lazily import the heavy/real implementations
   const { authenticate } = await import('../../services/browser/login.js')
   const { loadScenarios } = await import('../../scenario/schema.js')
@@ -76,19 +73,13 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
   const { runCase } = await import('../../services/explore/execute.js')
   const { classifyGap, classifyErrorQuality } = await import('../../services/explore/oracle.js')
   const { wasValueSaved } = await import('../../services/explore/dbProbe.js')
-  const { writeReport } = await import('../../pipeline/report.js')
+  const { writeFindings, appendActivity } = await import('../../state/findings.js')
   const { prepare } = await import('../../pipeline/prepare.js')
   const { seedDatabase } = await import('../../services/seed/seed.js')
-  const { adjudicate } = await import('../../services/llm/refute.js')
-  const { upsertIssue } = await import('../../services/github/issues.js')
-  const { parseRepoUrl } = await import('../../services/github/labels.js')
   const { defaultComposeRunner } = await import('../../services/compose/compose.js')
-
-  const repo = githubClient && repoUrl ? parseRepoUrl(repoUrl) : null
 
   const browserCtx = await deps.launchBrowser()
   try {
-    const ctx = { root: cwd, runId: '', config, secrets }
 
     // Track the most recent mutating-request response status, used by the gap oracle's
     // "2xx accepted" signal. Attached per page; explore drives a single page.
@@ -142,17 +133,8 @@ export async function runExplore(cwd: string, opts: ExploreOpts, deps: RunExplor
       // sourceRules (spec §4.2 — Laravel FormRequest / Zod / class-validator extraction) is a
       // deferred follow-up; constraint modeling currently uses DB columns + HTML only. The
       // `sourceRules` hook on ExploreDeps is left injectable for when ingestion is wired.
-      writeReport,
-      reportDeps: {
-        ctx,
-        llm,
-        adjudicate,
-        upsertIssue: (client, r, finding, label) => upsertIssue(client, r, finding, label, allSecrets),
-        // No-op baseline save: explore must NOT clobber the crawl baseline.
-        store: { saveBaseline: async () => {} },
-        githubClient,
-        repo,
-      },
+      writeFindings,
+      appendActivity,
       prepare,
       seedDatabase: (seed, root, s) => seedDatabase(seed, root, defaultComposeRunner, s),
     })
