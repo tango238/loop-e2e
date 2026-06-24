@@ -1,0 +1,16 @@
+{
+  "currentPhase": "storming",
+  "completedPhases": ["discover", "storming"],
+  "lastUpdated": "2026-06-25",
+  "openQuestions": [
+    "[残課題] error-handling カテゴリの explore 連携（一過性エラー再現）— 別 issue"
+  ],
+  "decisions": [
+    "Feedback = 独立 Learning コンテキスト（Adjudication と Scenario Authoring を補正）",
+    "Input Exploration = Observation の一部（run --explore で統合）",
+    "classification は Adjudication 専用語、Feedback 側は validity"
+  ],
+  "codeChanges": [
+    "explore→verify ギャップを run --explore で配線 (D-1 2パスクロール)。run.ts/cli/index.ts/config schema + tests。error-handling は残課題。"
+  ]
+}
