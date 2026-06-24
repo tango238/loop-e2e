@@ -150,7 +150,7 @@ export async function runFeedback(
       }
     }
   } else {
-    logger.info({ classification: verifyResult.classification }, 'Feedback deemed invalid — no changes applied')
+    logger.info({ validityClass: verifyResult.validityClass }, 'Feedback deemed invalid — no changes applied')
   }
 
   // --- 4. Persist feedback (always) ---
