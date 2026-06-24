@@ -246,15 +246,23 @@ program
             }
           : null
 
+      // Shared by the explore-state stage and the post-explore recrawl so both authenticate the
+      // same scenario-aware way (2FA + custom selectors via the designated login scenario).
+      const exploreCreds = exploreTarget?.auth?.username && exploreTarget.auth.password
+        ? { username: exploreTarget.auth.username, password: exploreTarget.auth.password }
+        : null
+      const exploreLoginScenario = opts.explore
+        ? (await import('../scenario/loginScenario.js')).findLoginScenario(scenarios, selAuth?.loginPath)
+        : undefined
+
       const exploreState = opts.explore
         ? async (root: string) => {
-            if (!exploreTarget?.auth?.username || !exploreTarget.auth.password) {
+            if (!exploreTarget?.auth || !exploreCreds) {
               throw new Error('run --explore: target credentials not configured (usernameEnv/passwordEnv)')
             }
-            const creds = { username: exploreTarget.auth.username, password: exploreTarget.auth.password }
+            const creds = exploreCreds
             const { explore } = await import('../pipeline/explore.js')
             const { authenticate: exAuth } = await import('../services/browser/login.js')
-            const { findLoginScenario } = await import('../scenario/loginScenario.js')
             const { discoverForms } = await import('../services/explore/discover.js')
             const { inferCandidateTables, modelConstraints } = await import('../services/explore/constraintModel.js')
             const { introspectTable } = await import('../services/explore/dbIntrospect.js')
@@ -267,7 +275,7 @@ program
             const dbConf = config.databases[0]
             const dbType: 'postgres' | 'mysql' = (dbConf?.type as 'postgres' | 'mysql') ?? 'postgres'
             const db = dbConf ? createDbAdapter(dbConf, secrets.db[dbConf.passwordEnv] ?? '') : undefined
-            const loginScenario = findLoginScenario(scenarios, selAuth?.loginPath)
+            const loginScenario = exploreLoginScenario
             let lastStatus: number | undefined
             const exCreatePage = async () => {
               const page = await launchedBrowser.newPage()
@@ -306,9 +314,23 @@ program
           }
         : undefined
 
-      const recrawl = opts.explore && exploreTarget
-        ? async (ctx: import('../domain/types.js').RunContext) =>
-            crawl(launchedBrowser, exploreTarget, scenarios, `${ctx.root}/.loop-e2e/runs/${ctx.runId}/screenshots-state`)
+      // The recrawl reuses the SAME scenario-aware login as the explore stage (2FA/custom selectors)
+      // — otherwise generic form login would fail/capture the login page in those environments and
+      // verify(conditional/error-handling) would never observe the state --explore just produced.
+      // On auth failure the hook throws, so runRun's recrawl guard falls back to the pre-explore pages.
+      const recrawl = opts.explore && exploreTarget && exploreCreds
+        ? async (ctx: import('../domain/types.js').RunContext) => {
+            const recrawlAuth = async (page: import('../services/browser/crawler.js').PageLike, t: import('../domain/types.js').TargetEnv) => {
+              const r = await authenticate(page, t, exploreCreds, {
+                pinRunner: defaultComposeRunner,
+                secrets: allSecrets,
+                twoFactor: exploreLoginScenario?.twoFactor,
+                scriptDir: exploreLoginScenario?.scriptDir,
+              })
+              if (!r.ok) throw new Error(`run --explore recrawl: authentication failed (${r.detail})`)
+            }
+            return crawl(launchedBrowser, exploreTarget, scenarios, `${ctx.root}/.loop-e2e/runs/${ctx.runId}/screenshots-state`, { authenticate: recrawlAuth })
+          }
         : undefined
 
       const seedCfg = config.launch?.seed

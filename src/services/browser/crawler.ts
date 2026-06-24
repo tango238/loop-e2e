@@ -123,11 +123,22 @@ async function capturePage(page: PageLike, url: string, screenshotDir: string): 
  * Crawls the base URL first, then follows navigation targets from scenario steps
  * to build a multi-page RawPage array. Deduplicates by URL.
  */
+export type CrawlOpts = {
+  /**
+   * Scenario-aware login hook. When provided, it authenticates the crawl page INSTEAD of the
+   * built-in generic `performFormLogin` — letting callers reuse the full login flow (2FA, custom
+   * selectors) so the crawl observes authenticated state in environments generic login can't reach.
+   * It must throw on failure (the caller then decides how to degrade).
+   */
+  authenticate?: (page: PageLike, target: TargetEnv) => Promise<void>
+}
+
 export async function crawlWithBrowser(
   browser: BrowserLike,
   target: TargetEnv,
   scenarios: Scenario[],
   screenshotDir: string,
+  opts: CrawlOpts = {},
 ): Promise<RawPage[]> {
   await ensureDir(screenshotDir)
 
@@ -137,8 +148,11 @@ export async function crawlWithBrowser(
   const page = await browser.newPage()
 
   try {
-    // Authenticate if needed
-    if (target.auth?.strategy === 'form') {
+    // Authenticate if needed. A scenario-aware hook (2FA/custom selectors) takes precedence over
+    // the generic form login when supplied.
+    if (opts.authenticate) {
+      await opts.authenticate(page, target)
+    } else if (target.auth?.strategy === 'form') {
       await performFormLogin(page, target.baseUrl, target.auth)
     }
 
@@ -187,8 +201,9 @@ export async function crawl(
   target: TargetEnv,
   scenarios: Scenario[],
   screenshotDir: string,
+  opts: CrawlOpts = {},
 ): Promise<RawPage[]> {
-  return crawlWithBrowser(browser, target, scenarios, screenshotDir)
+  return crawlWithBrowser(browser, target, scenarios, screenshotDir, opts)
 }
 
 function slugify(url: string): string {
