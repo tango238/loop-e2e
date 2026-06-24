@@ -130,8 +130,11 @@ program
   .option('--target <name>', 'Target name to run against')
   .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
   .option('--skip-scenarios', 'Skip executing adopted scenarios (only collect/diff/verify)')
+  .option('--explore', 'Run the exploratory input-verification stage before verify (destructive; re-seeds after)')
+  .option('--screen <path...>', 'Screen path(s) for --explore (falls back to config.explore.screens)')
+  .option('--no-reseed', 'With --explore: do not re-seed the DB afterward (skips the dev-guard)')
   .option('--no-report', 'Write findings to the store only; aggregate later with `loop-e2e report`')
-  .action(async (opts: { target?: string; skipPrepare?: boolean; skipScenarios?: boolean; report?: boolean }) => {
+  .action(async (opts: { target?: string; skipPrepare?: boolean; skipScenarios?: boolean; explore?: boolean; screen?: string[]; reseed?: boolean; report?: boolean }) => {
     const cwd = process.cwd()
 
     let config: import('../config/schema.js').Config
@@ -225,7 +228,105 @@ program
         return page
       }
 
-      runResult = await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
+      // --- run --explore wiring: explore-state stage + post-explore re-crawl + final reseed ---
+      // Built lazily; the heavy explore impls are imported only when --explore is set.
+      const exploreScreens = (opts.screen && opts.screen.length > 0) ? opts.screen : (config.explore?.screens ?? [])
+      const selAuth = selectedTarget.auth
+      const exploreTarget: import('../domain/types.js').TargetEnv | null =
+        selAuth && selAuth.strategy !== 'none'
+          ? {
+              name: selectedTarget.name,
+              baseUrl: selectedTarget.baseUrl,
+              auth: {
+                strategy: selAuth.strategy,
+                loginPath: selAuth.loginPath,
+                username: selAuth.usernameEnv ? secrets.targetAuth[selAuth.usernameEnv] : undefined,
+                password: selAuth.passwordEnv ? secrets.targetAuth[selAuth.passwordEnv] : undefined,
+              },
+            }
+          : null
+
+      const exploreState = opts.explore
+        ? async (root: string) => {
+            if (!exploreTarget?.auth?.username || !exploreTarget.auth.password) {
+              throw new Error('run --explore: target credentials not configured (usernameEnv/passwordEnv)')
+            }
+            const creds = { username: exploreTarget.auth.username, password: exploreTarget.auth.password }
+            const { explore } = await import('../pipeline/explore.js')
+            const { authenticate: exAuth } = await import('../services/browser/login.js')
+            const { findLoginScenario } = await import('../scenario/loginScenario.js')
+            const { discoverForms } = await import('../services/explore/discover.js')
+            const { inferCandidateTables, modelConstraints } = await import('../services/explore/constraintModel.js')
+            const { introspectTable } = await import('../services/explore/dbIntrospect.js')
+            const { generateCases, buildBaseline } = await import('../services/explore/caseGen.js')
+            const { runCase } = await import('../services/explore/execute.js')
+            const { classifyGap, classifyErrorQuality } = await import('../services/explore/oracle.js')
+            const { wasValueSaved } = await import('../services/explore/dbProbe.js')
+            const { createDbAdapter } = await import('../services/db/index.js')
+            const { seedDatabase } = await import('../services/seed/seed.js')
+            const dbConf = config.databases[0]
+            const dbType: 'postgres' | 'mysql' = (dbConf?.type as 'postgres' | 'mysql') ?? 'postgres'
+            const db = dbConf ? createDbAdapter(dbConf, secrets.db[dbConf.passwordEnv] ?? '') : undefined
+            const loginScenario = findLoginScenario(scenarios, selAuth?.loginPath)
+            let lastStatus: number | undefined
+            const exCreatePage = async () => {
+              const page = await launchedBrowser.newPage()
+              const r = page as unknown as { on?: (e: 'response', cb: (res: { status: () => number; request: () => { method: () => string } }) => void) => void }
+              r.on?.('response', (res) => {
+                try {
+                  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(res.request().method().toUpperCase())) lastStatus = res.status()
+                } catch { /* ignore */ }
+              })
+              return page
+            }
+            // explore runs with prepare/reseed deferred to run: run already prepared, and run owns
+            // the final reseed (Stage 5), so noReseed:true here.
+            return explore(root, { target: selectedTarget.name, screens: exploreScreens, skipPrepare: true, noReseed: true }, {
+              target: exploreTarget,
+              creds,
+              dbType,
+              seed: config.launch?.seed,
+              config,
+              secrets: allSecrets,
+              execDeps: { secrets: allSecrets, getLastStatus: () => lastStatus },
+              createPage: exCreatePage,
+              authenticate: (page, t, c) => exAuth(page, t, c, {
+                pinRunner: defaultComposeRunner,
+                secrets: allSecrets,
+                twoFactor: loginScenario?.twoFactor,
+                scriptDir: loginScenario?.scriptDir,
+              }),
+              discoverForms: (page, t, screens) => discoverForms(page, t, screens),
+              inferCandidateTables, introspectTable, modelConstraints, generateCases, buildBaseline,
+              runCase, classifyGap, classifyErrorQuality, wasValueSaved, db, llm,
+              writeFindings, appendActivity,
+              // Required by ExploreDeps; unused here because noReseed:true (run owns the reseed).
+              seedDatabase: (seed, root, s) => seedDatabase(seed, root, defaultComposeRunner, s),
+            })
+          }
+        : undefined
+
+      const recrawl = opts.explore && exploreTarget
+        ? async (ctx: import('../domain/types.js').RunContext) =>
+            crawl(launchedBrowser, exploreTarget, scenarios, `${ctx.root}/.loop-e2e/runs/${ctx.runId}/screenshots-state`)
+        : undefined
+
+      const seedCfg = config.launch?.seed
+      const reseed = opts.explore && seedCfg
+        ? async (root: string) => {
+            const { seedDatabase } = await import('../services/seed/seed.js')
+            await seedDatabase(seedCfg, root, defaultComposeRunner, allSecrets)
+          }
+        : undefined
+
+      runResult = await runRun(cwd, {
+        target: opts.target,
+        skipPrepare: opts.skipPrepare,
+        skipScenarios: opts.skipScenarios,
+        explore: opts.explore,
+        screens: exploreScreens,
+        noReseed: opts.reseed === false,
+      }, {
         ctx: runContext,
         prepare,
         collect: (ctx, _deps) => collect(ctx, {
@@ -262,6 +363,9 @@ program
             await ctx?.clearCookies?.()
           },
         },
+        exploreState,
+        recrawl,
+        reseed,
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

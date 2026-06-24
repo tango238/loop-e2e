@@ -76,6 +76,12 @@ const GrowSchema = z.object({
   excludePaths: z.array(z.string()).default([]),
 })
 
+/** Exploratory input verification integrated into `run` (run --explore). */
+const ExploreSchema = z.object({
+  /** Default screen paths to explore when `run --explore` is given no --screen flags. */
+  screens: z.array(z.string().min(1)).default([]),
+})
+
 export const ConfigSchema = z.object({
   repositories: z.array(RepositorySchema).min(1),
   targets: z.array(TargetSchema).min(1),
@@ -92,9 +98,11 @@ export const ConfigSchema = z.object({
   launch: LaunchSchema.optional(),
   setup: z.array(z.object({ command: z.string().min(1) })).optional(),
   grow: GrowSchema.optional(),
+  explore: ExploreSchema.optional(),
 })
 
 export type Config = z.infer<typeof ConfigSchema>
 export type DbConfig = z.infer<typeof DbSchema>
 export type Grow = z.infer<typeof GrowSchema>
+export type Explore = z.infer<typeof ExploreSchema>
 export const CONFIG_FILENAME = 'loop-e2e.config.yaml'

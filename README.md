@@ -49,24 +49,45 @@ loop-e2e scenario --from docs/requirements.md docs/api.md   # == grow --source-o
 Runs the full verification pipeline:
 
 ```
-prepare (repo refresh → setup hooks) → collect → diff → verify → (login) → (scenarios) → report
+prepare (repo refresh → setup hooks) → collect → [explore] → [re-crawl] → diff → verify → (login) → (scenarios) → persist → [reseed]
 ```
+
+(`[…]` stages run only with `--explore`.)
 
 **Stages:**
 
 1. **prepare** — Runs at the start of every `loop-e2e run` (see [Prepare phase](#prepare-phase) below).
-2. **collect** — Crawls the target app with Playwright, extracts structured page info with Claude.
-3. **diff** — Compares current structure against baseline; detects missing transitions, changed items, expectation gaps.
-4. **verify** — Runs 5 verify categories: layout, security, conditional rendering, registered data, error handling.
-5. **scenarios** — Executes adopted scenarios' steps against the live app (see [Scenario execution](#scenario-execution-auth-preconditions) below). Skipped with `--skip-scenarios`.
-6. **persist** — Writes the run's findings to the shared **findings store** (`.loop-e2e/findings/`) + the baseline, then (unless `--no-report`) invokes the `report` aggregation. See [Findings store & report](#findings-store--report).
+2. **collect** — Crawls the target app with Playwright, extracts structured page info with Claude. This is the **clean, pre-explore** crawl used by `diff`.
+3. **explore** *(only with `--explore`)* — Runs the exploratory input-verification stage (see [`explore`](#explore--探索的入力検証)) to produce UI/DB state, persisting its own `input-validation` findings. **Reseed is deferred** to the end of the run.
+4. **re-crawl** *(only with `--explore`)* — A second crawl **after** explore so `verify`'s `conditional`/`error-handling` categories see the produced UI state. `diff` keeps using the clean Stage-2 structure (so explore-produced state never shows up as a false diff).
+5. **diff** — Compares the clean structure against baseline; detects missing transitions, changed items, expectation gaps.
+6. **verify** — Runs 5 verify categories: layout, security, conditional rendering, registered data, error handling. With `--explore`, `registered-data` (queries the runtime DB) and `conditional` (reads the re-crawled pages) become meaningful because explore's writes are still present (reseed deferred).
+7. **scenarios** — Executes adopted scenarios' steps against the live app (see [Scenario execution](#scenario-execution-auth-preconditions) below). Skipped with `--skip-scenarios`.
+8. **persist** — Writes the run's findings to the shared **findings store** (`.loop-e2e/findings/`) + the baseline, then (unless `--no-report`) invokes the `report` aggregation. See [Findings store & report](#findings-store--report).
+9. **reseed** *(only with `--explore`, unless `--no-reseed`)* — Restores the DB via `launch.seed` after explore's destructive writes. `run` owns this reseed (the standalone `explore` command reseeds itself).
 
 ```sh
 loop-e2e run --target staging
 loop-e2e run --skip-prepare     # Skip repo refresh and setup hooks
 loop-e2e run --skip-scenarios   # Skip executing adopted scenarios
 loop-e2e run --no-report        # Write findings only; aggregate later with `loop-e2e report`
+loop-e2e run --explore --screen /user/create   # + exploratory input verification (destructive; reseeds after)
 ```
+
+#### `run --explore` (integrated exploratory input verification)
+
+`--explore` folds the standalone [`explore`](#explore--探索的入力検証) stage into `run`, **before** verify, so the
+data-dependent verify categories observe the state it produces:
+
+- **Destructive + reseed:** explore submits invalid/boundary input, so it writes to the DB. `run`
+  re-seeds the DB at the very end (`launch.seed`). If `launch.seed` is not configured and you do not
+  pass `--no-reseed`, `run --explore` **aborts before any write** (same dev-guard as `explore`).
+- **Two-pass crawl:** `collect` (clean) feeds `diff`; a second crawl after explore feeds the
+  `conditional`/`error-handling` verify categories. This keeps explore-produced state out of `diff`.
+- **Screens:** `--screen <path...>` selects the forms to explore; falls back to `config.explore.screens`.
+- **`error-handling` caveat:** explore's error messages are shown immediately after submit and are
+  transient — a later crawl does not reproduce them. So `error-handling` does **not** yet benefit from
+  `--explore` (tracked as a follow-up); `registered-data` and `conditional` do.
 
 ### Scenario execution (auth preconditions)
 

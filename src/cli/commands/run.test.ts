@@ -809,3 +809,125 @@ describe('runRun — scenario execution stage', () => {
     expect(executeScenarios).not.toHaveBeenCalled()
   })
 })
+
+describe('runRun — explore integration (run --explore)', () => {
+  const statePage = { url: 'http://localhost/state', title: 'state', html: '<html></html>', meta: {}, screenshotPath: '' }
+
+  // A config with launch.seed so the explore guard passes and run can reseed.
+  const ctxWithSeed = () => ({
+    root: '/tmp/root',
+    runId: 'run-explore',
+    config: {
+      repositories: [],
+      targets: [{ name: 'local', baseUrl: 'http://localhost:3000', auth: { strategy: 'form' as const, loginPath: '/login', usernameEnv: 'USERNAME', passwordEnv: 'PASSWORD' } }],
+      databases: [],
+      schedule: { intervalMinutes: 60 },
+      scenarioDir: 'scenarios',
+      github: { labels: { ready: 'ready', autoDetect: 'auto' } },
+      baseline: { commit: false },
+      models: { planning: 'claude-opus-4-8', report: 'claude-sonnet-4-6', verification: 'claude-opus-4-8' },
+      ingestion: { cloneDepth: 50, tokenBudgetPerRepo: 120000, gitLogCount: 50 },
+      refutation: { panelSize: 3, confidenceThreshold: 0.8, lenses: ['correctness' as const, 'security' as const, 'intentionality' as const] },
+      launch: {
+        compose: { files: ['docker-compose.yml'], projectName: 'app' },
+        readiness: { url: 'http://localhost:3000', timeoutSec: 180, intervalSec: 3 },
+        seed: { command: 'seed.sh' },
+        targetName: 'local',
+      },
+    },
+    secrets: { db: {}, targetAuth: { USERNAME: 'u', PASSWORD: 'p' }, anthropicApiKey: '', githubToken: '' },
+  })
+
+  it('runs explore→recrawl between collect and diff, feeds recrawl pages to verify, reseeds at the end', async () => {
+    const order: string[] = []
+    let verifyPages: unknown = 'not-set'
+
+    const deps = {
+      collect: vi.fn().mockImplementation(async () => { order.push('collect'); return makeCollectResult() }),
+      exploreState: vi.fn().mockImplementation(async () => { order.push('explore'); return { findings: [] } }),
+      recrawl: vi.fn().mockImplementation(async () => { order.push('recrawl'); return [statePage] }),
+      detectDiffs: vi.fn().mockImplementation(async () => { order.push('diff'); return [] }),
+      runVerify: vi.fn().mockImplementation(async (d: { pages: unknown }) => { order.push('verify'); verifyPages = d.pages; return [] }),
+      writeFindings: vi.fn().mockImplementation(async () => { order.push('report') }),
+      reseed: vi.fn().mockImplementation(async () => { order.push('reseed') }),
+      clock: () => 'run-explore',
+      ctx: ctxWithSeed(),
+    }
+
+    await runRun('/tmp/root', { explore: true }, deps)
+
+    expect(order).toEqual(['collect', 'explore', 'recrawl', 'diff', 'verify', 'report', 'reseed'])
+    expect(verifyPages).toEqual([statePage]) // verify uses the post-explore state crawl
+    expect(deps.reseed).toHaveBeenCalledOnce()
+  })
+
+  it('diff uses the clean pre-explore structure, not the post-explore re-crawl', async () => {
+    const cleanStructure = { generatedAt: '2024-01-01T00:00:00.000Z', pages: [], transitions: [] }
+    let diffCurrent: unknown = 'not-set'
+
+    const deps = {
+      collect: vi.fn().mockResolvedValue({ structure: cleanStructure, prior: emptyPrior, rawPages: [] }),
+      exploreState: vi.fn().mockResolvedValue({ findings: [] }),
+      recrawl: vi.fn().mockResolvedValue([statePage]),
+      detectDiffs: vi.fn().mockImplementation(async (d: { current: unknown }) => { diffCurrent = d.current; return [] }),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
+      reseed: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-explore-diff',
+      ctx: ctxWithSeed(),
+    }
+
+    await runRun('/tmp/root', { explore: true }, deps)
+    expect(diffCurrent).toBe(cleanStructure)
+  })
+
+  it('does NOT call exploreState/recrawl/reseed when --explore is off (default)', async () => {
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      exploreState: vi.fn(),
+      recrawl: vi.fn(),
+      reseed: vi.fn(),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-no-explore',
+    }
+    await runRun('/tmp/root', {}, deps)
+    expect(deps.exploreState).not.toHaveBeenCalled()
+    expect(deps.recrawl).not.toHaveBeenCalled()
+    expect(deps.reseed).not.toHaveBeenCalled()
+  })
+
+  it('aborts BEFORE any explore write when no seed is configured and --no-reseed is not set', async () => {
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      exploreState: vi.fn().mockResolvedValue({ findings: [] }),
+      recrawl: vi.fn(),
+      reseed: vi.fn(),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-explore-guard',
+      // no ctx ⇒ stub config has no launch.seed
+    }
+    await expect(runRun('/tmp/root', { explore: true }, deps)).rejects.toThrow(/launch\.seed/)
+    expect(deps.exploreState).not.toHaveBeenCalled()
+    expect(deps.collect).not.toHaveBeenCalled()
+  })
+
+  it('with --no-reseed: runs explore but skips the final reseed (no seed configured)', async () => {
+    const deps = {
+      collect: vi.fn().mockResolvedValue(makeCollectResult()),
+      exploreState: vi.fn().mockResolvedValue({ findings: [] }),
+      recrawl: vi.fn().mockResolvedValue([statePage]),
+      reseed: vi.fn(),
+      detectDiffs: vi.fn().mockResolvedValue([]),
+      runVerify: vi.fn().mockResolvedValue([]),
+      writeFindings: vi.fn().mockResolvedValue(undefined),
+      clock: () => 'run-explore-noreseed',
+    }
+    await runRun('/tmp/root', { explore: true, noReseed: true }, deps)
+    expect(deps.exploreState).toHaveBeenCalledOnce()
+    expect(deps.reseed).not.toHaveBeenCalled()
+  })
+})
