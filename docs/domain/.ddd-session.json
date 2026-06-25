@@ -5,6 +5,11 @@
   "openQuestions": [
     "[残課題] error-handling カテゴリの explore 連携（一過性エラー再現）— 別 issue"
   ],
+  "divergences": [
+    { "id": 1, "fromPhase": "storming", "type": "gap", "authority": "model", "decision": "run --explore で配線 (D-1)", "status": "done", "commit": "2773a1f" },
+    { "id": 2, "fromPhase": "storming", "type": "naming", "authority": "converge", "decision": "classification→validityClass", "status": "done", "commit": "3f449bc" },
+    { "id": 3, "fromPhase": "storming", "type": "mismatch", "authority": "model", "decision": "収集系3ステージで認証コンテキスト共有=ログイン1回", "status": "done", "commit": "pending" }
+  ],
   "decisions": [
     "Feedback = 独立 Learning コンテキスト（Adjudication と Scenario Authoring を補正）",
     "Input Exploration = Observation の一部（run --explore で統合）",

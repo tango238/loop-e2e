@@ -20,7 +20,10 @@
 9. `DiffFindingDetected` — 差分（transition/displayItem/inputItem/expectation-gap）を検出した
 10. `VerificationRan` — 5カテゴリ（layout/security/conditional/registered-data/error-handling）を検証した
 11. `VerifyFindingDetected` — verify が finding を検出した
-12. `LoggedIn` — 認証要シナリオの前にログイン(+2FA)した（1回・セッション再利用）
+12. `LoggedIn` — ログイン(+2FA)した。**run 全体で1回ではない**: `browser.newPage()` が cookie を分離するため
+    ステージ単位で独立に発生し得る。ただし **collect/explore/recrawl（収集系3ステージ）は認証済み
+    `BrowserContext` を共有して1回だけ**ログインする（`run --explore`、sync #3 で実装）。**login(3b)/
+    scenario(3c) は意図的に独立**（3b はログイン検証そのもの、3c は authenticated↔unauthenticated を切替）。
 13. `ScenarioExecuted` — adopted シナリオの steps を実機実行した
 14. `ScenarioFindingRecorded` — scenario finding（pass/fail）を記録した
 
