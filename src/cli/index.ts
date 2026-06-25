@@ -202,6 +202,8 @@ program
     ].filter(Boolean) as string[]
 
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
+    // Shared authenticated context for the collection stages (declared here so `finally` can close it).
+    let sharedAuthedContext: import('../services/browser/crawler.js').BrowserLike | null = null
     let runResult: { findingsWritten: boolean } = { findingsWritten: false }
     try {
       browserCtx = await launchBrowser()
@@ -255,6 +257,51 @@ program
         ? (await import('../scenario/loginScenario.js')).findLoginScenario(scenarios, selAuth?.loginPath)
         : undefined
 
+      // --- Shared authenticated context for the collection stages (collect / explore / recrawl) ---
+      // browser.newPage() isolates cookies per page, so without this each of those stages would log
+      // in independently — 3-4× under --explore, including repeated 2FA (PINs are often single-use).
+      // BrowserContext.newPage() shares cookies, so we authenticate ONCE (scenario-aware, 2FA) into one
+      // context and reuse it. Created lazily on first use, which is the collect stage — i.e. AFTER
+      // prepare. 3b login / 3c scenarios keep their own sessions by design (login is the test subject;
+      // scenarios toggle authenticated/unauthenticated). collect also gains 2FA reach as a side benefit.
+      type AuthedContext = import('../services/browser/crawler.js').BrowserLike
+      const getAuthedContext = async (): Promise<AuthedContext> => {
+        if (sharedAuthedContext) return sharedAuthedContext
+        if (!exploreTarget?.auth || !exploreCreds) {
+          throw new Error('run --explore: target credentials not configured (usernameEnv/passwordEnv)')
+        }
+        const ctx = await (launchedBrowser as unknown as { newContext: () => Promise<AuthedContext> }).newContext()
+        const authPage = await ctx.newPage()
+        const raw = authPage as unknown as {
+          on?: (event: 'response', cb: (res: { url: () => string; status: () => number; text: () => Promise<string> }) => void) => void
+        }
+        raw.on?.('response', (res) => {
+          try {
+            if (!/\/auth\/(login|verify-two-factor|two-factor)/i.test(res.url())) return
+            const status = res.status()
+            res.text().then((t) => { lastAuthResponse = { status, bodyText: t } }).catch(() => { lastAuthResponse = { status } })
+          } catch { /* ignore listener errors */ }
+        })
+        const r = await authenticate(authPage, exploreTarget, exploreCreds, {
+          pinRunner: defaultComposeRunner,
+          secrets: allSecrets,
+          twoFactor: exploreLoginScenario?.twoFactor,
+          scriptDir: exploreLoginScenario?.scriptDir,
+          getAuthResponse: () => lastAuthResponse,
+        })
+        if (!r.ok) {
+          await ctx.close().catch(() => {})
+          throw new Error(`run --explore: shared authentication failed (${r.detail})`)
+        }
+        sharedAuthedContext = ctx
+        return ctx
+      }
+      // A BrowserLike whose pages come from the shared authenticated context (lazily established).
+      const authedBrowser: AuthedContext = {
+        newPage: async () => (await getAuthedContext()).newPage(),
+        close: async () => {}, // the context is closed once in the outer finally
+      }
+
       const exploreState = opts.explore
         ? async (root: string) => {
             if (!exploreTarget?.auth || !exploreCreds) {
@@ -262,7 +309,6 @@ program
             }
             const creds = exploreCreds
             const { explore } = await import('../pipeline/explore.js')
-            const { authenticate: exAuth } = await import('../services/browser/login.js')
             const { discoverForms } = await import('../services/explore/discover.js')
             const { inferCandidateTables, modelConstraints } = await import('../services/explore/constraintModel.js')
             const { introspectTable } = await import('../services/explore/dbIntrospect.js')
@@ -275,10 +321,11 @@ program
             const dbConf = config.databases[0]
             const dbType: 'postgres' | 'mysql' = (dbConf?.type as 'postgres' | 'mysql') ?? 'postgres'
             const db = dbConf ? createDbAdapter(dbConf, secrets.db[dbConf.passwordEnv] ?? '') : undefined
-            const loginScenario = exploreLoginScenario
             let lastStatus: number | undefined
+            // Pages come from the SHARED authenticated context, so explore does NOT log in again —
+            // its `authenticate` dep is a no-op verifying the already-established session.
             const exCreatePage = async () => {
-              const page = await launchedBrowser.newPage()
+              const page = await (await getAuthedContext()).newPage()
               const r = page as unknown as { on?: (e: 'response', cb: (res: { status: () => number; request: () => { method: () => string } }) => void) => void }
               r.on?.('response', (res) => {
                 try {
@@ -298,12 +345,8 @@ program
               secrets: allSecrets,
               execDeps: { secrets: allSecrets, getLastStatus: () => lastStatus },
               createPage: exCreatePage,
-              authenticate: (page, t, c) => exAuth(page, t, c, {
-                pinRunner: defaultComposeRunner,
-                secrets: allSecrets,
-                twoFactor: loginScenario?.twoFactor,
-                scriptDir: loginScenario?.scriptDir,
-              }),
+              // Session already established by the shared context; just confirm it.
+              authenticate: async () => ({ ok: true, detail: 'reusing shared authenticated session', finalUrl: exploreTarget.baseUrl }),
               discoverForms: (page, t, screens) => discoverForms(page, t, screens),
               inferCandidateTables, introspectTable, modelConstraints, generateCases, buildBaseline,
               runCase, classifyGap, classifyErrorQuality, wasValueSaved, db, llm,
@@ -314,23 +357,12 @@ program
           }
         : undefined
 
-      // The recrawl reuses the SAME scenario-aware login as the explore stage (2FA/custom selectors)
-      // — otherwise generic form login would fail/capture the login page in those environments and
-      // verify(conditional/error-handling) would never observe the state --explore just produced.
-      // On auth failure the hook throws, so runRun's recrawl guard falls back to the pre-explore pages.
-      const recrawl = opts.explore && exploreTarget && exploreCreds
-        ? async (ctx: import('../domain/types.js').RunContext) => {
-            const recrawlAuth = async (page: import('../services/browser/crawler.js').PageLike, t: import('../domain/types.js').TargetEnv) => {
-              const r = await authenticate(page, t, exploreCreds, {
-                pinRunner: defaultComposeRunner,
-                secrets: allSecrets,
-                twoFactor: exploreLoginScenario?.twoFactor,
-                scriptDir: exploreLoginScenario?.scriptDir,
-              })
-              if (!r.ok) throw new Error(`run --explore recrawl: authentication failed (${r.detail})`)
-            }
-            return crawl(launchedBrowser, exploreTarget, scenarios, `${ctx.root}/.loop-e2e/runs/${ctx.runId}/screenshots-state`, { authenticate: recrawlAuth })
-          }
+      // The recrawl reuses the SHARED authenticated context (already logged in once, 2FA included),
+      // so it crawls with skipLogin and observes the authenticated post-explore state without any
+      // extra login. (Supersedes the earlier per-recrawl auth hook.)
+      const recrawl = opts.explore && exploreTarget
+        ? async (ctx: import('../domain/types.js').RunContext) =>
+            crawl(await getAuthedContext(), exploreTarget, scenarios, `${ctx.root}/.loop-e2e/runs/${ctx.runId}/screenshots-state`, { skipLogin: true })
         : undefined
 
       const seedCfg = config.launch?.seed
@@ -353,9 +385,11 @@ program
         prepare,
         collect: (ctx, _deps) => collect(ctx, {
           store: storeModule,
-          crawl,
+          // Under --explore the clean baseline crawl reuses the shared authenticated context
+          // (skipLogin) so the whole collection phase logs in exactly once.
+          crawl: opts.explore ? (b, t, s, dir) => crawl(b, t, s, dir, { skipLogin: true }) : crawl,
           extractPageInfo: (lm, raw) => extractPageInfo(lm as Parameters<typeof extractPageInfo>[0], raw),
-          browser: launchedBrowser,
+          browser: opts.explore ? authedBrowser : launchedBrowser,
           llm,
           scenarios,
         }),
@@ -394,6 +428,12 @@ program
       process.stderr.write(`Run failed: ${msg}\n`)
       process.exit(1)
     } finally {
+      // Cast: the assignment happens inside getAuthedContext (a closure), which CFA doesn't track,
+      // so TS narrows the apparent type to null here.
+      const toClose = sharedAuthedContext as import('../services/browser/crawler.js').BrowserLike | null
+      if (toClose) {
+        await toClose.close().catch(() => {})
+      }
       if (browserCtx) {
         await browserCtx.browser.close().catch(() => {})
       }

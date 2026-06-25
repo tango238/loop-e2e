@@ -84,9 +84,12 @@ data-dependent verify categories observe the state it produces:
   pass `--no-reseed`, `run --explore` **aborts before any write** (same dev-guard as `explore`).
 - **Two-pass crawl:** `collect` (clean) feeds `diff`; a second crawl after explore feeds the
   `conditional`/`error-handling` verify categories. This keeps explore-produced state out of `diff`.
-  The second crawl reuses the **same scenario-aware login** as the explore stage (2FA / custom
-  selectors via the designated login scenario), so it actually observes the authenticated
-  post-explore state; if that login fails it falls back to the pre-explore pages.
+- **Single shared login:** `collect`, `explore`, and the post-explore re-crawl share one
+  authenticated browser context, so the collection phase logs in **once** (scenario-aware, 2FA
+  included) instead of per-stage. This avoids repeated 2FA (PINs are often single-use) and also lets
+  `collect` reach authenticated pages that generic form login can't. The login/scenario stages keep
+  their own sessions by design (login is the verification subject; scenarios toggle
+  authenticated/unauthenticated). If the shared login fails, the run aborts (same as standalone `explore`).
 - **Screens:** `--screen <path...>` selects the forms to explore; falls back to `config.explore.screens`.
 - **`error-handling` caveat:** explore's error messages are shown immediately after submit and are
   transient — a later crawl does not reproduce them. So `error-handling` does **not** yet benefit from

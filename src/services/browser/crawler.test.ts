@@ -180,6 +180,26 @@ describe('crawler — authenticate hook (scenario-aware login)', () => {
       ),
     ).rejects.toThrow('2FA failed')
   })
+
+  it('skipLogin reuses the already-authenticated session: no form login, no hook', async () => {
+    const page = makeFakePage()
+    const browser = makeFakeBrowser(page)
+    const { crawlWithBrowser } = await import('./crawler.js')
+
+    let hookCalled = false
+    const pages = await crawlWithBrowser(
+      browser as unknown as Parameters<typeof crawlWithBrowser>[0],
+      formTarget,
+      [],
+      '/tmp',
+      { skipLogin: true, authenticate: async () => { hookCalled = true } },
+    )
+
+    // skipLogin wins over both the hook and the generic form login
+    expect(hookCalled).toBe(false)
+    expect(page.goto).not.toHaveBeenCalledWith('https://example.com/login', expect.any(Object))
+    expect(pages.length).toBeGreaterThan(0)
+  })
 })
 
 // --- E2E test: real Playwright against a local static server ---

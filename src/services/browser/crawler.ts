@@ -131,6 +131,12 @@ export type CrawlOpts = {
    * It must throw on failure (the caller then decides how to degrade).
    */
   authenticate?: (page: PageLike, target: TargetEnv) => Promise<void>
+  /**
+   * Skip login entirely. Use when the page comes from a browser context that is ALREADY
+   * authenticated (e.g. a shared session established once and reused across stages) — the crawl
+   * just navigates with the existing cookies. Takes precedence over `authenticate`/form login.
+   */
+  skipLogin?: boolean
 }
 
 export async function crawlWithBrowser(
@@ -148,9 +154,11 @@ export async function crawlWithBrowser(
   const page = await browser.newPage()
 
   try {
-    // Authenticate if needed. A scenario-aware hook (2FA/custom selectors) takes precedence over
-    // the generic form login when supplied.
-    if (opts.authenticate) {
+    // Authenticate if needed. `skipLogin` (page from an already-authenticated shared context) wins;
+    // otherwise a scenario-aware hook (2FA/custom selectors) takes precedence over generic form login.
+    if (opts.skipLogin) {
+      logger.debug('crawl: skipLogin set — reusing the already-authenticated session')
+    } else if (opts.authenticate) {
       await opts.authenticate(page, target)
     } else if (target.auth?.strategy === 'form') {
       await performFormLogin(page, target.baseUrl, target.auth)
