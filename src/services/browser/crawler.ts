@@ -123,11 +123,28 @@ async function capturePage(page: PageLike, url: string, screenshotDir: string): 
  * Crawls the base URL first, then follows navigation targets from scenario steps
  * to build a multi-page RawPage array. Deduplicates by URL.
  */
+export type CrawlOpts = {
+  /**
+   * Scenario-aware login hook. When provided, it authenticates the crawl page INSTEAD of the
+   * built-in generic `performFormLogin` — letting callers reuse the full login flow (2FA, custom
+   * selectors) so the crawl observes authenticated state in environments generic login can't reach.
+   * It must throw on failure (the caller then decides how to degrade).
+   */
+  authenticate?: (page: PageLike, target: TargetEnv) => Promise<void>
+  /**
+   * Skip login entirely. Use when the page comes from a browser context that is ALREADY
+   * authenticated (e.g. a shared session established once and reused across stages) — the crawl
+   * just navigates with the existing cookies. Takes precedence over `authenticate`/form login.
+   */
+  skipLogin?: boolean
+}
+
 export async function crawlWithBrowser(
   browser: BrowserLike,
   target: TargetEnv,
   scenarios: Scenario[],
   screenshotDir: string,
+  opts: CrawlOpts = {},
 ): Promise<RawPage[]> {
   await ensureDir(screenshotDir)
 
@@ -137,8 +154,13 @@ export async function crawlWithBrowser(
   const page = await browser.newPage()
 
   try {
-    // Authenticate if needed
-    if (target.auth?.strategy === 'form') {
+    // Authenticate if needed. `skipLogin` (page from an already-authenticated shared context) wins;
+    // otherwise a scenario-aware hook (2FA/custom selectors) takes precedence over generic form login.
+    if (opts.skipLogin) {
+      logger.debug('crawl: skipLogin set — reusing the already-authenticated session')
+    } else if (opts.authenticate) {
+      await opts.authenticate(page, target)
+    } else if (target.auth?.strategy === 'form') {
       await performFormLogin(page, target.baseUrl, target.auth)
     }
 
@@ -187,8 +209,9 @@ export async function crawl(
   target: TargetEnv,
   scenarios: Scenario[],
   screenshotDir: string,
+  opts: CrawlOpts = {},
 ): Promise<RawPage[]> {
-  return crawlWithBrowser(browser, target, scenarios, screenshotDir)
+  return crawlWithBrowser(browser, target, scenarios, screenshotDir, opts)
 }
 
 function slugify(url: string): string {

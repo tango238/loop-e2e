@@ -9,9 +9,12 @@ export type FeedbackEvidence = {
   findingCategory: string
 }
 
+// `validityClass` (not `classification`): the word "classification" is reserved for the
+// Adjudication domain (Verdict/RefuterVote = bug|unnecessary|uncertain). Feedback judgments live
+// in the Learning context and are described under "validity" (valid + its sub-label).
 const FeedbackVerifyResponseSchema = z.object({
   valid: z.boolean(),
-  classification: z.string().min(1),
+  validityClass: z.string().min(1),
   rationale: z.string().min(1),
 })
 
@@ -58,7 +61,7 @@ Determine whether the user feedback is:
 Respond with a JSON object matching:
 {
   "valid": boolean,          // true = valid correction, false = misunderstanding
-  "classification": string,  // e.g. "false-positive", "misunderstanding", "general-correction", "out-of-scope"
+  "validityClass": string,   // e.g. "false-positive", "misunderstanding", "general-correction", "out-of-scope"
   "rationale": string        // 1-3 sentences explaining your reasoning
 }`
 }

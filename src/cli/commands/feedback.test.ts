@@ -19,7 +19,7 @@ function makeMockLlm(valid: boolean): Llm {
   return {
     complete: vi.fn().mockResolvedValue({
       valid,
-      classification: valid ? 'false-positive' : 'misunderstanding',
+      validityClass: valid ? 'false-positive' : 'misunderstanding',
       rationale: valid ? 'User is correct.' : 'User misunderstood the finding.',
     }),
   } as unknown as Llm

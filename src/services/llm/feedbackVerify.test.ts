@@ -29,14 +29,14 @@ describe('feedbackVerify', () => {
     it('returns valid=true when LLM classifies feedback as a real correction', async () => {
       const llm = makeMockLlm({
         valid: true,
-        classification: 'false-positive',
+        validityClass: 'false-positive',
         rationale: 'User correctly identified CSRF token via meta tag pattern.',
       })
 
       const result = await verifyFeedback(llm, baseFeedback, baseEvidence)
 
       expect(result.valid).toBe(true)
-      expect(result.classification).toBe('false-positive')
+      expect(result.validityClass).toBe('false-positive')
       expect(result.rationale).toBeTypeOf('string')
       expect(result.rationale.length).toBeGreaterThan(0)
     })
@@ -44,20 +44,20 @@ describe('feedbackVerify', () => {
     it('returns valid=false when LLM classifies feedback as a misunderstanding', async () => {
       const llm = makeMockLlm({
         valid: false,
-        classification: 'misunderstanding',
+        validityClass: 'misunderstanding',
         rationale: 'User is confused about what CSRF protection requires.',
       })
 
       const result = await verifyFeedback(llm, baseFeedback, baseEvidence)
 
       expect(result.valid).toBe(false)
-      expect(result.classification).toBe('misunderstanding')
+      expect(result.validityClass).toBe('misunderstanding')
     })
 
     it('uses role=verification (Opus) for the LLM call', async () => {
       const mockComplete = vi.fn().mockResolvedValue({
         valid: true,
-        classification: 'false-positive',
+        validityClass: 'false-positive',
         rationale: 'Ok',
       })
       const llm = { complete: mockComplete } as unknown as Llm
@@ -84,7 +84,7 @@ describe('feedbackVerify', () => {
     it('handles feedback without a targetFindingId gracefully', async () => {
       const llm = makeMockLlm({
         valid: true,
-        classification: 'general-correction',
+        validityClass: 'general-correction',
         rationale: 'General feedback accepted.',
       })
       const feedbackNoTarget: Feedback = {

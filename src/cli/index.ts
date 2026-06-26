@@ -130,8 +130,11 @@ program
   .option('--target <name>', 'Target name to run against')
   .option('--skip-prepare', 'Skip the pre-run prepare phase (repo refresh + setup hooks)')
   .option('--skip-scenarios', 'Skip executing adopted scenarios (only collect/diff/verify)')
+  .option('--explore', 'Run the exploratory input-verification stage before verify (destructive; re-seeds after)')
+  .option('--screen <path...>', 'Screen path(s) for --explore (falls back to config.explore.screens)')
+  .option('--no-reseed', 'With --explore: do not re-seed the DB afterward (skips the dev-guard)')
   .option('--no-report', 'Write findings to the store only; aggregate later with `loop-e2e report`')
-  .action(async (opts: { target?: string; skipPrepare?: boolean; skipScenarios?: boolean; report?: boolean }) => {
+  .action(async (opts: { target?: string; skipPrepare?: boolean; skipScenarios?: boolean; explore?: boolean; screen?: string[]; reseed?: boolean; report?: boolean }) => {
     const cwd = process.cwd()
 
     let config: import('../config/schema.js').Config
@@ -199,6 +202,8 @@ program
     ].filter(Boolean) as string[]
 
     let browserCtx: { browser: import('../services/browser/crawler.js').BrowserLike } | null = null
+    // Shared authenticated context for the collection stages (declared here so `finally` can close it).
+    let sharedAuthedContext: import('../services/browser/crawler.js').BrowserLike | null = null
     let runResult: { findingsWritten: boolean } = { findingsWritten: false }
     try {
       browserCtx = await launchBrowser()
@@ -225,14 +230,166 @@ program
         return page
       }
 
-      runResult = await runRun(cwd, { target: opts.target, skipPrepare: opts.skipPrepare, skipScenarios: opts.skipScenarios }, {
+      // --- run --explore wiring: explore-state stage + post-explore re-crawl + final reseed ---
+      // Built lazily; the heavy explore impls are imported only when --explore is set.
+      const exploreScreens = (opts.screen && opts.screen.length > 0) ? opts.screen : (config.explore?.screens ?? [])
+      const selAuth = selectedTarget.auth
+      const exploreTarget: import('../domain/types.js').TargetEnv | null =
+        selAuth && selAuth.strategy !== 'none'
+          ? {
+              name: selectedTarget.name,
+              baseUrl: selectedTarget.baseUrl,
+              auth: {
+                strategy: selAuth.strategy,
+                loginPath: selAuth.loginPath,
+                username: selAuth.usernameEnv ? secrets.targetAuth[selAuth.usernameEnv] : undefined,
+                password: selAuth.passwordEnv ? secrets.targetAuth[selAuth.passwordEnv] : undefined,
+              },
+            }
+          : null
+
+      // Shared by the explore-state stage and the post-explore recrawl so both authenticate the
+      // same scenario-aware way (2FA + custom selectors via the designated login scenario).
+      const exploreCreds = exploreTarget?.auth?.username && exploreTarget.auth.password
+        ? { username: exploreTarget.auth.username, password: exploreTarget.auth.password }
+        : null
+      const exploreLoginScenario = opts.explore
+        ? (await import('../scenario/loginScenario.js')).findLoginScenario(scenarios, selAuth?.loginPath)
+        : undefined
+
+      // --- Shared authenticated context for the collection stages (collect / explore / recrawl) ---
+      // browser.newPage() isolates cookies per page, so without this each of those stages would log
+      // in independently — 3-4× under --explore, including repeated 2FA (PINs are often single-use).
+      // BrowserContext.newPage() shares cookies, so we authenticate ONCE (scenario-aware, 2FA) into one
+      // context and reuse it. Created lazily on first use, which is the collect stage — i.e. AFTER
+      // prepare. 3b login / 3c scenarios keep their own sessions by design (login is the test subject;
+      // scenarios toggle authenticated/unauthenticated). collect also gains 2FA reach as a side benefit.
+      type AuthedContext = import('../services/browser/crawler.js').BrowserLike
+      const getAuthedContext = async (): Promise<AuthedContext> => {
+        if (sharedAuthedContext) return sharedAuthedContext
+        if (!exploreTarget?.auth || !exploreCreds) {
+          throw new Error('run --explore: target credentials not configured (usernameEnv/passwordEnv)')
+        }
+        const ctx = await (launchedBrowser as unknown as { newContext: () => Promise<AuthedContext> }).newContext()
+        const authPage = await ctx.newPage()
+        const raw = authPage as unknown as {
+          on?: (event: 'response', cb: (res: { url: () => string; status: () => number; text: () => Promise<string> }) => void) => void
+        }
+        raw.on?.('response', (res) => {
+          try {
+            if (!/\/auth\/(login|verify-two-factor|two-factor)/i.test(res.url())) return
+            const status = res.status()
+            res.text().then((t) => { lastAuthResponse = { status, bodyText: t } }).catch(() => { lastAuthResponse = { status } })
+          } catch { /* ignore listener errors */ }
+        })
+        const r = await authenticate(authPage, exploreTarget, exploreCreds, {
+          pinRunner: defaultComposeRunner,
+          secrets: allSecrets,
+          twoFactor: exploreLoginScenario?.twoFactor,
+          scriptDir: exploreLoginScenario?.scriptDir,
+          getAuthResponse: () => lastAuthResponse,
+        })
+        if (!r.ok) {
+          await ctx.close().catch(() => {})
+          throw new Error(`run --explore: shared authentication failed (${r.detail})`)
+        }
+        sharedAuthedContext = ctx
+        return ctx
+      }
+      // A BrowserLike whose pages come from the shared authenticated context (lazily established).
+      const authedBrowser: AuthedContext = {
+        newPage: async () => (await getAuthedContext()).newPage(),
+        close: async () => {}, // the context is closed once in the outer finally
+      }
+
+      const exploreState = opts.explore
+        ? async (root: string) => {
+            if (!exploreTarget?.auth || !exploreCreds) {
+              throw new Error('run --explore: target credentials not configured (usernameEnv/passwordEnv)')
+            }
+            const creds = exploreCreds
+            const { explore } = await import('../pipeline/explore.js')
+            const { discoverForms } = await import('../services/explore/discover.js')
+            const { inferCandidateTables, modelConstraints } = await import('../services/explore/constraintModel.js')
+            const { introspectTable } = await import('../services/explore/dbIntrospect.js')
+            const { generateCases, buildBaseline } = await import('../services/explore/caseGen.js')
+            const { runCase } = await import('../services/explore/execute.js')
+            const { classifyGap, classifyErrorQuality } = await import('../services/explore/oracle.js')
+            const { wasValueSaved } = await import('../services/explore/dbProbe.js')
+            const { createDbAdapter } = await import('../services/db/index.js')
+            const { seedDatabase } = await import('../services/seed/seed.js')
+            const dbConf = config.databases[0]
+            const dbType: 'postgres' | 'mysql' = (dbConf?.type as 'postgres' | 'mysql') ?? 'postgres'
+            const db = dbConf ? createDbAdapter(dbConf, secrets.db[dbConf.passwordEnv] ?? '') : undefined
+            let lastStatus: number | undefined
+            // Pages come from the SHARED authenticated context, so explore does NOT log in again —
+            // its `authenticate` dep is a no-op verifying the already-established session.
+            const exCreatePage = async () => {
+              const page = await (await getAuthedContext()).newPage()
+              const r = page as unknown as { on?: (e: 'response', cb: (res: { status: () => number; request: () => { method: () => string } }) => void) => void }
+              r.on?.('response', (res) => {
+                try {
+                  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(res.request().method().toUpperCase())) lastStatus = res.status()
+                } catch { /* ignore */ }
+              })
+              return page
+            }
+            // explore runs with prepare/reseed deferred to run: run already prepared, and run owns
+            // the final reseed (Stage 5), so noReseed:true here.
+            return explore(root, { target: selectedTarget.name, screens: exploreScreens, skipPrepare: true, noReseed: true }, {
+              target: exploreTarget,
+              creds,
+              dbType,
+              seed: config.launch?.seed,
+              config,
+              secrets: allSecrets,
+              execDeps: { secrets: allSecrets, getLastStatus: () => lastStatus },
+              createPage: exCreatePage,
+              // Session already established by the shared context; just confirm it.
+              authenticate: async () => ({ ok: true, detail: 'reusing shared authenticated session', finalUrl: exploreTarget.baseUrl }),
+              discoverForms: (page, t, screens) => discoverForms(page, t, screens),
+              inferCandidateTables, introspectTable, modelConstraints, generateCases, buildBaseline,
+              runCase, classifyGap, classifyErrorQuality, wasValueSaved, db, llm,
+              writeFindings, appendActivity,
+              // Required by ExploreDeps; unused here because noReseed:true (run owns the reseed).
+              seedDatabase: (seed, root, s) => seedDatabase(seed, root, defaultComposeRunner, s),
+            })
+          }
+        : undefined
+
+      // The recrawl reuses the SHARED authenticated context (already logged in once, 2FA included),
+      // so it crawls with skipLogin and observes the authenticated post-explore state without any
+      // extra login. (Supersedes the earlier per-recrawl auth hook.)
+      const recrawl = opts.explore && exploreTarget
+        ? async (ctx: import('../domain/types.js').RunContext) =>
+            crawl(await getAuthedContext(), exploreTarget, scenarios, `${ctx.root}/.loop-e2e/runs/${ctx.runId}/screenshots-state`, { skipLogin: true })
+        : undefined
+
+      const seedCfg = config.launch?.seed
+      const reseed = opts.explore && seedCfg
+        ? async (root: string) => {
+            const { seedDatabase } = await import('../services/seed/seed.js')
+            await seedDatabase(seedCfg, root, defaultComposeRunner, allSecrets)
+          }
+        : undefined
+
+      runResult = await runRun(cwd, {
+        target: opts.target,
+        skipPrepare: opts.skipPrepare,
+        skipScenarios: opts.skipScenarios,
+        explore: opts.explore,
+        screens: exploreScreens,
+        noReseed: opts.reseed === false,
+      }, {
         ctx: runContext,
         prepare,
         collect: (ctx, _deps) => collect(ctx, {
           store: storeModule,
-          crawl,
+          // Under --explore the clean baseline crawl reuses the shared authenticated context
+          // (skipLogin) so the whole collection phase logs in exactly once.
+          crawl: opts.explore ? (b, t, s, dir) => crawl(b, t, s, dir, { skipLogin: true }) : crawl,
           extractPageInfo: (lm, raw) => extractPageInfo(lm as Parameters<typeof extractPageInfo>[0], raw),
-          browser: launchedBrowser,
+          browser: opts.explore ? authedBrowser : launchedBrowser,
           llm,
           scenarios,
         }),
@@ -262,12 +419,21 @@ program
             await ctx?.clearCookies?.()
           },
         },
+        exploreState,
+        recrawl,
+        reseed,
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       process.stderr.write(`Run failed: ${msg}\n`)
       process.exit(1)
     } finally {
+      // Cast: the assignment happens inside getAuthedContext (a closure), which CFA doesn't track,
+      // so TS narrows the apparent type to null here.
+      const toClose = sharedAuthedContext as import('../services/browser/crawler.js').BrowserLike | null
+      if (toClose) {
+        await toClose.close().catch(() => {})
+      }
       if (browserCtx) {
         await browserCtx.browser.close().catch(() => {})
       }

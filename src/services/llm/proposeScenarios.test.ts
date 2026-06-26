@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { proposeScenarios, summarizeRequirements } from './proposeScenarios.js'
+import { proposeScenarios, summarizeRequirements, applyDefaultAuthPrecondition } from './proposeScenarios.js'
 import type { Llm } from './client.js'
 import type { RawPage, PageInfo } from '../../domain/types.js'
 import type { Scenario } from '../../scenario/schema.js'
@@ -82,5 +82,39 @@ describe('proposeScenarios', () => {
       { extractPageInfo, generateScenarios },
     )
     expect(result.map((s) => s.id)).toEqual(['grow-src'])
+  })
+
+  it('defaults proposed scenarios to an authenticated precondition (grow = post-login pages)', async () => {
+    const extractPageInfo = vi.fn(async (_l: Llm, r: RawPage) => pageInfo(r.url))
+    const llm = { complete: vi.fn(async () => [scn('dashboard')]) } as unknown as Llm
+    const result = await proposeScenarios(llm, { uncovered: [rawPage('http://x/dashboard')], requirements: [] }, { extractPageInfo })
+    expect(result[0].precondition).toEqual({ auth: 'authenticated' })
+  })
+})
+
+describe('applyDefaultAuthPrecondition', () => {
+  it('adds auth:authenticated to a scenario lacking a precondition', () => {
+    const [out] = applyDefaultAuthPrecondition([scn('a')])
+    expect(out.precondition).toEqual({ auth: 'authenticated' })
+  })
+
+  it('preserves an explicit precondition (does not override unauthenticated)', () => {
+    const explicit: Scenario = { ...scn('b'), precondition: { auth: 'unauthenticated' } }
+    const [out] = applyDefaultAuthPrecondition([explicit])
+    expect(out.precondition).toEqual({ auth: 'unauthenticated' })
+  })
+
+  it('exempts the login scenario (step targets the loginPath)', () => {
+    const login: Scenario = {
+      id: 'grow-login', title: 'ログイン', businessFlow: 'sign in',
+      steps: [
+        { action: 'navigate', target: '/login', expectedOutcome: 'login form' },
+        { action: 'fill', target: '/login', input: 'x', expectedOutcome: 'filled' },
+        { action: 'submit', target: '/login', expectedOutcome: 'dashboard' },
+      ],
+      expectedResults: [{ kind: 'ui', description: 'd', assertion: 'a' }], expectedDbState: [],
+    }
+    const [out] = applyDefaultAuthPrecondition([login], '/login')
+    expect(out.precondition).toBeUndefined()
   })
 })

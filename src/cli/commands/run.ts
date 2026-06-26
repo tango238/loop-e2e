@@ -15,6 +15,12 @@ export type RunOpts = {
   target?: string
   skipPrepare?: boolean
   skipScenarios?: boolean
+  /** Enable the exploratory input-verification stage (produces DB/UI state before verify). */
+  explore?: boolean
+  /** Screen paths for the explore stage (falls back to config.explore.screens). */
+  screens?: string[]
+  /** Skip the final DB re-seed (dev escape hatch; explore writes will NOT be restored). */
+  noReseed?: boolean
 }
 
 type CollectFn = (ctx: RunContext, deps: object) => Promise<CollectResult>
@@ -78,6 +84,20 @@ export type RunDeps = {
   ) => Promise<VerifyFinding[]>
   /** Deps forwarded to executeScenarios (pinRunner, vars, secrets, authenticate, clearCookies, …) */
   scenarioExecDeps?: ExecuteScenariosDeps
+  /**
+   * Exploratory input-verification stage (run --explore). Produces input-exploration state
+   * (invalid/boundary writes) and persists its own `input-validation` findings (source:'explore').
+   * Run calls it with reseed deferred — run owns the final reseed (see `reseed`).
+   * Returns the findings it produced (run merges them into its verify findings).
+   */
+  exploreState?: (root: string) => Promise<{ findings: VerifyFinding[] }>
+  /**
+   * Re-crawl after the explore stage so conditional/error-handling verify see produced UI state.
+   * Returns raw pages only (no baseline/diff bookkeeping — that uses the pre-explore collect).
+   */
+  recrawl?: (ctx: RunContext) => Promise<RawPage[]>
+  /** Restore the DB after a destructive explore run. Run owns this when explore ran. */
+  reseed?: (root: string) => Promise<void>
 }
 
 function makeEmptyStructure(): SiteStructure {
@@ -353,10 +373,26 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
     logger.info({ root }, 'prepare phase complete')
   }
 
-  // Stage 1: collect
+  // Stage 0.4: explore guard — explore writes invalid/boundary data, so refuse to run it without a
+  // way to restore the DB. Mirror explore.ts's guard, but here run owns the final reseed.
+  // Aborts BEFORE any destructive write (propagates).
+  if (opts.explore) {
+    const seedConfigured = Boolean(runCtx.config.launch?.seed)
+    if (!seedConfigured && !opts.noReseed) {
+      throw new Error(
+        'run --explore: launch.seed is not configured and --no-reseed was not passed; aborting to avoid leaving the DB dirty',
+      )
+    }
+    if (!seedConfigured && opts.noReseed) {
+      logger.warn({ root }, 'run --explore: running with --no-reseed and NO seed configured — DB changes will NOT be restored')
+    }
+  }
+
+  // Stage 1: collect (#1, pre-explore). This is the CLEAN baseline crawl used by diff — it must run
+  // before any explore-produced state pollutes the app, so diff compares like-for-like vs baseline.
   let structure: SiteStructure = makeEmptyStructure()
   let prior: PriorState = emptyPrior
-  let collectedPages: import('../../domain/types.js').RawPage[] = deps.pages ?? []
+  let collectedPages: RawPage[] = deps.pages ?? []
   try {
     const result = await collect(runCtx, {})
     structure = result.structure
@@ -367,7 +403,32 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
     logger.error({ error, runId }, 'collect stage failed — continuing with empty structure')
   }
 
-  // Stage 2: diff — use deps.scenarios (not hardcoded []) so production gets real scenario data
+  // Stage 1.5: explore-state (optional). Produces input-exploration state (invalid/boundary writes)
+  // and persists its own input-validation findings (source:'explore'). Reseed is deferred to Stage 5.
+  if (opts.explore && deps.exploreState) {
+    try {
+      const exploreResult = await deps.exploreState(root)
+      logger.info({ runId, findings: exploreResult.findings.length }, 'explore-state stage complete')
+    } catch (error) {
+      logger.error({ error, runId }, 'explore-state stage failed — continuing')
+    }
+  }
+
+  // Stage 1.6: re-crawl (#2, post-explore). The crawled pages now reflect explore-produced state,
+  // so conditional/error-handling verify become meaningful. Only the raw pages are needed here —
+  // diff keeps using the clean Stage-1 structure. Falls back to Stage-1 pages on failure.
+  let verifyPages: RawPage[] = collectedPages
+  if (opts.explore && deps.recrawl) {
+    try {
+      const statePages = await deps.recrawl(runCtx)
+      if (statePages.length > 0) verifyPages = statePages
+    } catch (error) {
+      logger.error({ error, runId }, 'post-explore re-crawl failed — verify uses pre-explore pages')
+    }
+  }
+
+  // Stage 2: diff — use deps.scenarios (not hardcoded []) so production gets real scenario data.
+  // Always uses the clean pre-explore structure.
   let diffFindings: DiffFinding[] = []
   try {
     diffFindings = await detectDiffs({
@@ -380,12 +441,14 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
     logger.error({ error, runId }, 'diff stage failed — continuing with empty findings')
   }
 
-  // Stage 3: verify — run all 5 categories, resilient to per-category failure
+  // Stage 3: verify — run all 5 categories, resilient to per-category failure.
+  // Uses the post-explore state pages (verifyPages) + runtime DB (explore writes still present
+  // because reseed is deferred to Stage 5).
   let verifyFindings: VerifyFinding[] = []
   try {
     verifyFindings = await runVerify({
       llm: llm as never,
-      pages: collectedPages,
+      pages: verifyPages,
       scenarios: deps.scenarios ?? [],
       config: runCtx.config,
       secrets: runCtx.secrets.db,
@@ -430,5 +493,15 @@ export async function runRun(root: string, opts: RunOpts, deps: RunDeps): Promis
   } catch (error) {
     logger.error({ error, runId }, 'activity append failed')
   }
+
+  // Stage 5: re-seed (run owns the final reseed when explore produced destructive state).
+  // Runs after findings are persisted. A reseed failure is safety-critical (DB left dirty), so it
+  // propagates rather than being swallowed like the resilient stages above.
+  if (opts.explore && !opts.noReseed && deps.reseed) {
+    logger.info({ runId }, 'reseed stage starting (restoring DB after explore)')
+    await deps.reseed(root)
+    logger.info({ runId }, 'reseed stage complete')
+  }
+
   return { findingsWritten }
 }

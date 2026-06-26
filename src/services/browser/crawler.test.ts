@@ -136,6 +136,72 @@ describe('crawler (unit, fake browser)', () => {
   })
 })
 
+describe('crawler — authenticate hook (scenario-aware login)', () => {
+  const formTarget: TargetEnv = {
+    name: 'test-target',
+    baseUrl: 'https://example.com',
+    auth: { strategy: 'form', loginPath: '/login', username: 'user@example.com', password: 'secret' },
+  }
+
+  it('uses the injected authenticate hook INSTEAD of generic form login', async () => {
+    const page = makeFakePage()
+    const browser = makeFakeBrowser(page)
+    const { crawlWithBrowser } = await import('./crawler.js')
+
+    let hookCalled = false
+    let hookTarget: TargetEnv | null = null
+    const pages = await crawlWithBrowser(
+      browser as unknown as Parameters<typeof crawlWithBrowser>[0],
+      formTarget,
+      [],
+      '/tmp',
+      { authenticate: async (_p, t) => { hookCalled = true; hookTarget = t as TargetEnv } },
+    )
+
+    expect(hookCalled).toBe(true)
+    expect(hookTarget).toBe(formTarget)
+    // generic performFormLogin navigates to the login path; with the hook it must NOT.
+    expect(page.goto).not.toHaveBeenCalledWith('https://example.com/login', expect.any(Object))
+    expect(pages.length).toBeGreaterThan(0)
+  })
+
+  it('propagates a hook auth failure so the caller can fall back', async () => {
+    const page = makeFakePage()
+    const browser = makeFakeBrowser(page)
+    const { crawlWithBrowser } = await import('./crawler.js')
+
+    await expect(
+      crawlWithBrowser(
+        browser as unknown as Parameters<typeof crawlWithBrowser>[0],
+        formTarget,
+        [],
+        '/tmp',
+        { authenticate: async () => { throw new Error('2FA failed') } },
+      ),
+    ).rejects.toThrow('2FA failed')
+  })
+
+  it('skipLogin reuses the already-authenticated session: no form login, no hook', async () => {
+    const page = makeFakePage()
+    const browser = makeFakeBrowser(page)
+    const { crawlWithBrowser } = await import('./crawler.js')
+
+    let hookCalled = false
+    const pages = await crawlWithBrowser(
+      browser as unknown as Parameters<typeof crawlWithBrowser>[0],
+      formTarget,
+      [],
+      '/tmp',
+      { skipLogin: true, authenticate: async () => { hookCalled = true } },
+    )
+
+    // skipLogin wins over both the hook and the generic form login
+    expect(hookCalled).toBe(false)
+    expect(page.goto).not.toHaveBeenCalledWith('https://example.com/login', expect.any(Object))
+    expect(pages.length).toBeGreaterThan(0)
+  })
+})
+
 // --- E2E test: real Playwright against a local static server ---
 // Gated: skips if chromium is not available
 

@@ -6,6 +6,7 @@ import type { Config } from '../../config/schema.js'
 import type { DbDriverOptions } from '../../services/db/index.js'
 import { verifyLayout } from './layout.js'
 import { verifySecurity } from './security.js'
+import { verifyAccessControl } from './accessControl.js'
 import { verifyConditional } from './conditional.js'
 import { verifyRegisteredData } from './registeredData.js'
 import { verifyErrorHandling } from './errorHandling.js'
@@ -26,7 +27,7 @@ type CategoryResult = {
 }
 
 /**
- * Runs all 5 verify categories and aggregates results.
+ * Runs all verify categories and aggregates results.
  * Each category is isolated: a failure in one does NOT abort the others.
  * Errors are logged and the category contributes zero findings.
  */
@@ -55,6 +56,18 @@ export async function runVerify(deps: RunVerifyDeps): Promise<VerifyFinding[]> {
       fn: () => verifyErrorHandling({ llm, pages }),
     },
   ]
+
+  // access-control: only meaningful when the target has a form login (a known login path to
+  // redirect to). Probes each crawled route anonymously and expects a guard.
+  const target = config.targets[0]
+  if (target?.auth?.strategy === 'form' && target.auth.loginPath) {
+    const baseUrl = target.baseUrl
+    const loginPath = target.auth.loginPath
+    categories.push({
+      name: 'access-control',
+      fn: () => verifyAccessControl({ pages, baseUrl, loginPath }),
+    })
+  }
 
   const allFindings: VerifyFinding[] = []
 
