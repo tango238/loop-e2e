@@ -10,10 +10,34 @@
 | 1 | storming | gap | model | explore→verify を `run --explore` で配線（2パスクロール D-1） | done | 2773a1f |
 | 2 | storming | naming | 収束 | `classification`→`validityClass`（語彙分離: Adjudication 専用語に予約） | done | 3f449bc |
 | 3 | storming | mismatch | model | 収集系3ステージ（collect/explore/recrawl）で認証コンテキスト共有＝ログイン1回 | done | (pending) |
-| 4 | storming | gap | model | grow 生成シナリオに `precondition.auth=authenticated` を既定付与（方針A・生成側） | done | (uncommitted) |
-| 5 | storming | gap | model | `access-control` 検証カテゴリ新設（未認証アクセス拒否の負テスト）。precondition と分離 | pending | — |
+| 4 | storming | gap | model | grow 生成シナリオに `precondition.auth=authenticated` を既定付与（方針A・生成側） | done | 0396d32 |
+| 5 | storming | gap | model | `access-control` 検証カテゴリ新設（未認証アクセス拒否の負テスト）。precondition と分離 | done | ed9cce9 |
 
 ## 差異の詳細
+
+### #5 アクセス制御（未認証アクセス拒否）の検証カテゴリ新設
+
+- **発見**（storming --challenge）: 「認証必須ページが未認証で閲覧できる」状態（OWASP Broken Access
+  Control）を検出する仕組みが無い。`verify/security.ts` は CSRF トークン検出のみ。
+- **設計判断（--challenge で収束）**: チェックを `precondition.auth`（Arrange）に混ぜず、**Verification 集約の
+  独立カテゴリ `access-control`** に置く（Assert）。D-4 と同一信号源（認証ゲート済みルートの知識）の双対消費。
+- **オラクル**: 「ログイン後発見」だけでは公開ページを誤検知する。**実プローブの応答**で確定する。
+- **権威と判断**: model（ガード検証が必要・未実装ギャップ）。コードを追加。
+- **実装**: `src/pipeline/verify/accessControl.ts`（新規）。認証済みクロールで到達した各ルートを
+  **匿名（cookie 無し）プローブ**し、`isGuarded` で判定：redirect / 401 / 403 / 200-but-login-page は
+  ガード扱い、**2xx で非ログイン内容＝Broken Access Control** として `VerifyFinding(category:'access-control',
+  severity:high)`。`verify/index.ts` に配線（form ログイン構成かつ loginPath ありの時のみ起動）。
+  `VerifyFinding.category` union に `'access-control'` 追加。プローブは注入可能（既定は `fetch redirect:manual`）。
+  既存の反証パネル（correctness/security/intentionality）をそのまま通すため残存誤検知は uncertain に降格。
+- **実装結果**: TDD で `accessControl.test.ts` 12件（routePaths / looksLikeLoginPage / isGuarded /
+  verifyAccessControl 正常・ガード・例外・空）。全 **599 緑** / tsc / eslint / build クリーン。
+- **end-to-end 検証**（open-pms・サーバ稼働）:
+  - 実アプリ：`/dashboard`・`/reservations`・`/facility`・`/users`・`/roles`・`/plugins` を匿名プローブ →
+    全件 `303 → /login`（guarded=true）→ **access-control findings 0**（適切ガードで誤検知なし）。
+  - 真陽性：未ガードのスタブルート（200＋保護コンテンツ）→ high finding 1件を正しく生成。
+- **スコープ外（新しい赤付箋）**: ロール間の水平権限（IDOR・他ユーザーのリソース閲覧／別ロールの管理操作）は
+  本カテゴリ対象外。別 divergence 候補。
+- **モデル再整合**: [[event-storming]] 赤付箋 D-5 を解消に更新。`RunVerify` に `access-control` カテゴリ追加。
 
 ### #4 scenario(3c) の `precondition.auth` 契約断絶（生成側で既定付与）
 

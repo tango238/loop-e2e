@@ -1,17 +1,60 @@
 {
   "currentPhase": "storming",
-  "completedPhases": ["discover", "storming"],
+  "completedPhases": [
+    "discover",
+    "storming"
+  ],
   "lastUpdated": "2026-06-26",
   "openQuestions": [
     "[残課題] error-handling カテゴリの explore 連携（一過性エラー再現）— 別 issue",
-    "[D-4] scenario(3c) の precondition.auth 契約断絶: 修正方針 A/B/C を sync で確定"
+    "[D-5 スコープ外] ロール間の水平権限(IDOR/他ユーザーリソース)検証は access-control 対象外 — 別 divergence 候補"
   ],
   "divergences": [
-    { "id": 1, "fromPhase": "storming", "type": "gap", "authority": "model", "decision": "run --explore で配線 (D-1)", "status": "done", "commit": "2773a1f" },
-    { "id": 2, "fromPhase": "storming", "type": "naming", "authority": "converge", "decision": "classification→validityClass", "status": "done", "commit": "3f449bc" },
-    { "id": 3, "fromPhase": "storming", "type": "mismatch", "authority": "model", "decision": "収集系3ステージで認証コンテキスト共有=ログイン1回", "status": "done", "commit": "pending" },
-    { "id": 4, "fromPhase": "storming", "type": "gap", "authority": "model", "decision": "方針A採用: proposeScenarios に applyDefaultAuthPrecondition を追加し grow生成シナリオへ precondition.auth=authenticated を既定付与(ログインシナリオは除外)。単体4件追加・全587緑・build/lint緑。end-to-end検証(open-pms): run2=ok13false/0true(全/login張付き)→run3=ok7false/6true・evidenceが認証後実URLに変化。残失敗は実フォーム項目差異(basePrice等)で真の所見", "status": "done", "commit": null },
-    { "id": 5, "fromPhase": "storming", "type": "gap", "authority": "model", "decision": "access-control 検証カテゴリ新設(未認証アクセス拒否の負テスト)。precondition(Arrange)に混ぜず Verification 集約に分離。認証ゲート済みルートを匿名プローブし302/401/403を期待。--challengeで設計収束", "status": "pending", "commit": null }
+    {
+      "id": 1,
+      "fromPhase": "storming",
+      "type": "gap",
+      "authority": "model",
+      "decision": "run --explore で配線 (D-1)",
+      "status": "done",
+      "commit": "2773a1f"
+    },
+    {
+      "id": 2,
+      "fromPhase": "storming",
+      "type": "naming",
+      "authority": "converge",
+      "decision": "classification→validityClass",
+      "status": "done",
+      "commit": "3f449bc"
+    },
+    {
+      "id": 3,
+      "fromPhase": "storming",
+      "type": "mismatch",
+      "authority": "model",
+      "decision": "収集系3ステージで認証コンテキスト共有=ログイン1回",
+      "status": "done",
+      "commit": "pending"
+    },
+    {
+      "id": 4,
+      "fromPhase": "storming",
+      "type": "gap",
+      "authority": "model",
+      "decision": "方針A採用: proposeScenarios に applyDefaultAuthPrecondition を追加し grow生成シナリオへ precondition.auth=authenticated を既定付与(ログインシナリオは除外)。単体4件追加・全587緑・build/lint緑。end-to-end検証(open-pms): run2=ok13false/0true(全/login張付き)→run3=ok7false/6true・evidenceが認証後実URLに変化。残失敗は実フォーム項目差異(basePrice等)で真の所見",
+      "status": "done",
+      "commit": "0396d32"
+    },
+    {
+      "id": 5,
+      "fromPhase": "storming",
+      "type": "gap",
+      "authority": "model",
+      "decision": "access-control 検証カテゴリ実装(verify/accessControl.ts)。認証済みクロール到達ルートを匿名プローブしredirect/401/403/200-loginはガード、2xx非ログイン内容をBroken Access Controlとしてhigh finding。verify/index配線(form+loginPath時のみ)。単体12件・全599緑。open-pmsで誤検知0+真陽性検出を確認。IDOR(水平権限)はスコープ外",
+      "status": "done",
+      "commit": "ed9cce9"
+    }
   ],
   "decisions": [
     "Feedback = 独立 Learning コンテキスト（Adjudication と Scenario Authoring を補正）",
