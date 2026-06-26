@@ -569,6 +569,39 @@ APP_USER=admin
 APP_PASS=pass
 ```
 
+## AI backend: Anthropic API or Claude Code CLI
+
+All AI features (scenario generation, diff/verify judgment, report prose) run through one
+of two interchangeable backends. Which one is used is decided by the `USE_CLAUDE_CODE`
+environment variable — no code or config change is needed to switch.
+
+- **Anthropic API (default)** — uses `@anthropic-ai/sdk`. Requires `ANTHROPIC_API_KEY`.
+  Best for CI/CD and production.
+
+  ```dotenv
+  # USE_CLAUDE_CODE unset (or false)
+  ANTHROPIC_API_KEY=sk-ant-...
+  ```
+
+- **Claude Code CLI (`claude -p`)** — shells out to your locally installed `claude`
+  binary in print mode, using your existing `claude` login. **No `ANTHROPIC_API_KEY`
+  required.** Best for local development.
+
+  ```dotenv
+  USE_CLAUDE_CODE=true
+  ```
+
+  Prerequisites:
+
+  ```bash
+  npm i -g @anthropic-ai/claude-code   # install the CLI
+  claude                               # run once to log in
+  ```
+
+  Each prompt is run as `claude --print --output-format json --model <model>` (the model
+  per role comes from `models.*` in the config) with the prompt piped on stdin. Accepted
+  truthy values for `USE_CLAUDE_CODE` are `1`, `true`, and `yes` (case-insensitive).
+
 ## Local-launch workflow
 
 `loop-e2e` can manage a local Docker Compose stack so you can run the full E2E
