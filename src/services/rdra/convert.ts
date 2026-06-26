@@ -1,5 +1,4 @@
-import { LE_PREFIX } from './types.js'
-import type { ApiEndpoint, OperationScenario, OperationStep, PendingEntry } from './types.js'
+import type { ApiEndpoint, OperationStep, PendingEntry } from './types.js'
 import { allSteps, type Scenario } from '../../scenario/schema.js'
 
 const METHOD_RE = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY)\s+(\S+)/i
@@ -39,20 +38,6 @@ export function apiEndpoints(scenario: Scenario): ApiEndpoint[] {
     })
 }
 
-/**
- * Reduce endpoints to the single string rdra reads: "<METHOD> <path>" / path / raw / "".
- * Only the FIRST endpoint is used (rdra's api_endpoint is a scalar) — for a matched
- * scenario, 2nd+ endpoints are intentionally not represented here. (They survive in full
- * in loop-e2e-pending.json for unmatched scenarios.)
- */
-export function apiEndpointString(eps: ApiEndpoint[]): string {
-  const first = eps[0]
-  if (!first) return ''
-  if (first.method && first.path) return `${first.method} ${first.path}`
-  if (first.path) return first.path
-  return first.raw
-}
-
 export function toOperationSteps(scenario: Scenario): OperationStep[] {
   return allSteps(scenario).map((s, i) => ({
     step_no: i + 1,
@@ -63,20 +48,11 @@ export function toOperationSteps(scenario: Scenario): OperationStep[] {
   }))
 }
 
-export function toOperationScenario(scenario: Scenario, usecase: { id: string; name: string }): OperationScenario {
-  return {
-    scenario_id: `${LE_PREFIX}${scenario.id}`,
-    usecase_id: usecase.id,
-    usecase_name: usecase.name,
-    scenario_name: scenario.title,
-    scenario_type: 'normal',
-    frontend_url: firstNavigateTarget(scenario) ?? '',
-    api_endpoint: apiEndpointString(apiEndpoints(scenario)),
-    steps: toOperationSteps(scenario),
-    variations: [],
-  }
-}
-
+/**
+ * Map a scenario to a PendingEntry — the inbound Published-Language record that
+ * rdra-analyzer's `reconcile` consumes. loop-e2e attaches NO usecase linkage:
+ * reconcile owns route matching, checkpoint fact-check and conflict detection.
+ */
 export function toPendingEntry(scenario: Scenario, navigateRoutes: string[]): PendingEntry {
   return {
     loop_e2e_id: scenario.id,
@@ -85,6 +61,6 @@ export function toPendingEntry(scenario: Scenario, navigateRoutes: string[]): Pe
     navigate_routes: navigateRoutes,
     api_endpoints: apiEndpoints(scenario),
     steps: toOperationSteps(scenario),
-    reason: 'no matching usecase by route',
+    reason: 'reconcile-owned: usecase matching delegated to rdra-analyzer',
   }
 }

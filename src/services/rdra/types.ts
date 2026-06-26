@@ -6,34 +6,6 @@ export type OperationStep = {
   ui_element: string
 }
 
-export type OperationScenario = {
-  scenario_id: string
-  usecase_id: string
-  usecase_name: string
-  scenario_name: string
-  scenario_type: string
-  frontend_url: string
-  /** Single string (rdra reads api_endpoint as a scalar) — "<METHOD> <path>" / path / raw / "" */
-  api_endpoint: string
-  steps: OperationStep[]
-  variations: string[]
-}
-
-export type Usecase = {
-  id: string
-  name: string
-  related_routes?: string[]
-  related_pages?: string[]
-  [k: string]: unknown
-}
-
-export type AnalysisResult = {
-  metadata?: Record<string, unknown>
-  usecases: Usecase[]
-  scenarios: OperationScenario[]
-  [k: string]: unknown
-}
-
 /** Structured API endpoint. method/path are null when not parseable; raw is always present. */
 export type ApiEndpoint = {
   method: string | null
@@ -41,6 +13,10 @@ export type ApiEndpoint = {
   raw: string
 }
 
+/**
+ * The inbound Published-Language record loop-e2e hands to rdra-analyzer's reconcile.
+ * Carries NO usecase linkage — reconcile is the sole arbiter (context-map R4).
+ */
 export type PendingEntry = {
   loop_e2e_id: string
   scenario_name: string
@@ -51,6 +27,3 @@ export type PendingEntry = {
   steps: OperationStep[]
   reason: string
 }
-
-/** Prefix marking loop-e2e-origin scenarios in the merged analysis file. */
-export const LE_PREFIX = 'LE-'
