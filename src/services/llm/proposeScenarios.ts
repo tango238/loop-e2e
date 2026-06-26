@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { ScenarioSchema, type Scenario } from '../../scenario/schema.js'
+import { isLoginScenario } from '../../scenario/loginScenario.js'
 import { buildProposePrompt } from './prompts/propose.js'
 import { generateScenarios as defaultGenerateScenarios } from './scenarioGen.js'
 import { extractPageInfo as defaultExtractPageInfo } from './structureExtract.js'
@@ -103,9 +104,26 @@ export async function proposeScenarios(
     }
   }
 
-  const normalized = normalizeIds(proposed)
+  const normalized = applyDefaultAuthPrecondition(normalizeIds(proposed), authHint?.loginPath)
   logger.info({ count: normalized.length }, 'Scenarios proposed')
   return normalized
+}
+
+/**
+ * grow proposes scenarios for pages discovered AFTER login, so each one assumes an
+ * authenticated session (see the propose/scenario prompts). The executor only establishes
+ * that session when `precondition.auth === 'authenticated'` is set explicitly, so default
+ * any scenario that lacks a precondition to `authenticated`. Without this the executor runs
+ * the steps on a fresh, cookie-less page and the app redirects every navigate to the login
+ * page (all steps then time out). The login scenario itself is exempt — it legitimately starts
+ * from an unauthenticated state and establishes the session.
+ */
+export function applyDefaultAuthPrecondition(scenarios: Scenario[], loginPath?: string): Scenario[] {
+  return scenarios.map((s) => {
+    if (s.precondition) return s
+    if (isLoginScenario(s, loginPath)) return s
+    return { ...s, precondition: { auth: 'authenticated' as const } }
+  })
 }
 
 /** Split an array into consecutive chunks of at most `size`. */
