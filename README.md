@@ -329,14 +329,16 @@ loop-e2e approve grow-hotel-list  # adopt specific ids
 
 ### `rdra-export`
 
-Exports adopted scenarios into an [rdra-analyzer](https://github.com/tango238/rdra-analyzer)
-`analysis_result.json` so its RDRA modelling / CRUD-gap / viewer steps can run on loop-e2e's
-scenarios. loop-e2e owns the scenarios; rdra-analyzer owns the usecases (from its `analyze`).
+Exports adopted scenarios to a `loop-e2e-pending.json` handoff that
+[rdra-analyzer](https://github.com/tango238/rdra-analyzer) reconciles into its
+`analysis_result.json`, so its RDRA modelling / CRUD-gap / viewer steps can run on loop-e2e's
+scenarios. loop-e2e owns the scenarios; rdra-analyzer owns the usecases (from its `analyze`)
+**and the matching** — `reconcile` is the sole arbiter.
 
 ```
 rdra-analyzer analyze          # rdra produces usecases in analysis_result.json
-loop-e2e rdra-export           # merge route-matched scenarios in; hand off the rest
-rdra-analyzer reconcile        # rdra fact-checks unmatched scenarios → creates/links usecases
+loop-e2e rdra-export           # hand off ALL scenarios to loop-e2e-pending.json (no matching here)
+rdra-analyzer reconcile        # rdra fact-checks each scenario → links/creates usecases
 rdra-analyzer rdra / verify / gap
 ```
 
@@ -346,20 +348,16 @@ loop-e2e rdra-export --into /path/to/output/usecases/analysis_result.json
 ```
 
 Behaviour:
-- Each scenario is matched to a usecase by **route** — its first `navigate` path and its API
-  endpoints (`kind:'api'` expectedResults) are compared against the usecase's
-  `related_pages` / `related_routes` using a shared `normalizeRoute` (leading `GET/POST/…`
-  method token stripped, `ANY` = wildcard, path normalized). Priority:
-  navigate-exact > api-exact > navigate-prefix > api-prefix.
-- **Matched** scenarios are merged into `analysis_result.json` `scenarios[]`, tagged
-  `scenario_id = "LE-<id>"`. Re-running replaces only `LE-` scenarios (idempotent); usecases,
-  non-`LE-` scenarios, and unknown fields are preserved. The merged `api_endpoint` is a single
-  string (rdra reads it as a scalar).
-- **Unmatched** scenarios are written to `loop-e2e-pending.json` (same dir as `--into`) with
-  structured `api_endpoints` (`{method,path,raw}[]`) for rdra-analyzer's reconcile step to
-  fact-check against source and link to a usecase. If none are unmatched, no pending file.
-- The written `analysis_result.json` is always referentially valid (no dangling `usecase_id`);
-  a validation failure aborts the write.
+- **Every** adopted scenario is written to `loop-e2e-pending.json` (in the same dir as `--into`)
+  with structured `api_endpoints` (`{method,path,raw}[]`), normalized `navigate_routes`, and
+  steps. loop-e2e attaches **no usecase linkage** and never reads or writes `analysis_result.json`.
+- rdra-analyzer's `reconcile` is the single inbound channel: it route-matches, fact-checks each
+  scenario against its source (checkpoint), detects conflicts, and links to or synthesizes a
+  usecase. Centralizing matching there (its Anti-Corruption Layer) keeps loop-e2e free of usecase
+  knowledge and avoids a second, weaker copy of the matching rules. If there are no scenarios,
+  no pending file is written.
+- `--into` only **anchors the output directory** (the pending file is its sibling); the
+  `analysis_result.json` it points at is left untouched.
 
 | Flag | Description |
 |------|-------------|
