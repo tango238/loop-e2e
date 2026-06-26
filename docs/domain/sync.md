@@ -11,7 +11,7 @@
 | 2 | storming | naming | 収束 | `classification`→`validityClass`（語彙分離: Adjudication 専用語に予約） | done | 3f449bc |
 | 3 | storming | mismatch | model | 収集系3ステージ（collect/explore/recrawl）で認証コンテキスト共有＝ログイン1回 | done | (pending) |
 | 4 | storming | gap | model | grow 生成シナリオに `precondition.auth=authenticated` を既定付与（方針A・生成側） | done | 0396d32 |
-| 5 | storming | gap | model | `access-control` 検証カテゴリ新設（未認証アクセス拒否の負テスト）。precondition と分離 | done | ed9cce9 |
+| 5 | storming | gap | model | `access-control` 検証カテゴリ新設（未認証アクセス拒否の負テスト・HTML hrefでルート発見）。precondition と分離 | done | ed9cce9,eb204be |
 
 ## 差異の詳細
 
@@ -29,12 +29,20 @@
   severity:high)`。`verify/index.ts` に配線（form ログイン構成かつ loginPath ありの時のみ起動）。
   `VerifyFinding.category` union に `'access-control'` 追加。プローブは注入可能（既定は `fetch redirect:manual`）。
   既存の反証パネル（correctness/security/intentionality）をそのまま通すため残存誤検知は uncertain に降格。
-- **実装結果**: TDD で `accessControl.test.ts` 12件（routePaths / looksLikeLoginPage / isGuarded /
-  verifyAccessControl 正常・ガード・例外・空）。全 **599 緑** / tsc / eslint / build クリーン。
-- **end-to-end 検証**（open-pms・サーバ稼働）:
-  - 実アプリ：`/dashboard`・`/reservations`・`/facility`・`/users`・`/roles`・`/plugins` を匿名プローブ →
-    全件 `303 → /login`（guarded=true）→ **access-control findings 0**（適切ガードで誤検知なし）。
-  - 真陽性：未ガードのスタブルート（200＋保護コンテンツ）→ high finding 1件を正しく生成。
+- **ルート発見の強化（動作確認で判明・修正）**: 当初はクロール済み `pages` の URL のみを対象にしたが、
+  **リンクされているが未クロールのルート**（クロール上限/BFS順）を取りこぼす欠陥が実パイプライン確認で判明。
+  さらに LLM 抽出の `structure.transitions` はリンクを欠落させ非決定的。→ `collectRoutes` を
+  **各ページの rendered HTML から `href` を決定的に抽出**（同一オリジン/http(s) のみ）する方式に変更。
+- **実装結果**: TDD で `accessControl.test.ts` 16件（extractHrefs / collectRoutes(pages+href, off-origin除外) /
+  looksLikeLoginPage / isGuarded / verifyAccessControl 正常・ガード・href未クロール・例外・空）。
+  全 **603 緑** / tsc / eslint / build クリーン。
+- **end-to-end 検証（実 `loop-e2e run` パイプライン経由）**: open-pms にダッシュボードからリンクした
+  **意図的に未ガードな `/internal-report`**（public:true）を一時設置して `run --skip-prepare --skip-scenarios`:
+  - access-control が `/internal-report` を匿名プローブ → `200`/非ログイン → **high finding 1件**を生成、
+    レポートでは 🔴 Critical「Broken Access Control」。**反証パネルが3レンズで反論を試みた末に `bug`
+    (confidence 0.70) と裁定**（uncertain に落ちず確定）。
+  - 同時にガード済み12ルート（`303 → /login`）は **access-control 検出 0**（誤検知なし）。
+  - 確認後 open-pms のデモ変更は revert 済み。
 - **スコープ外（新しい赤付箋）**: ロール間の水平権限（IDOR・他ユーザーのリソース閲覧／別ロールの管理操作）は
   本カテゴリ対象外。別 divergence 候補。
 - **モデル再整合**: [[event-storming]] 赤付箋 D-5 を解消に更新。`RunVerify` に `access-control` カテゴリ追加。

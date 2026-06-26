@@ -51,9 +51,9 @@
       "fromPhase": "storming",
       "type": "gap",
       "authority": "model",
-      "decision": "access-control 検証カテゴリ実装(verify/accessControl.ts)。認証済みクロール到達ルートを匿名プローブしredirect/401/403/200-loginはガード、2xx非ログイン内容をBroken Access Controlとしてhigh finding。verify/index配線(form+loginPath時のみ)。単体12件・全599緑。open-pmsで誤検知0+真陽性検出を確認。IDOR(水平権限)はスコープ外",
+      "decision": "access-control 検証カテゴリ実装(verify/accessControl.ts)。認証済みクロール到達ルートを匿名プローブしredirect/401/403/200-loginはガード、2xx非ログイン内容をBroken Access Controlとしてhigh finding。verify/index配線(form+loginPath時のみ)。単体12件・全599緑。open-pmsで誤検知0+真陽性検出を確認。IDOR(水平権限)はスコープ外。動作確認で未クロールリンク取りこぼしが判明→HTML hrefから決定的にルート発見に強化(eb204be)。実runで/internal-report真陽性(bug 0.70)+ガード済12誤検知0",
       "status": "done",
-      "commit": "ed9cce9"
+      "commit": "ed9cce9,eb204be"
     }
   ],
   "decisions": [
