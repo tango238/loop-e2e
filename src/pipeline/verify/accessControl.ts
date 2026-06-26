@@ -14,7 +14,7 @@ export type AccessProbeResult = {
 export type AccessProbe = (url: string) => Promise<AccessProbeResult>
 
 export type AccessControlDeps = {
-  /** Pages discovered by the authenticated crawl — their routes are the auth-gated candidates. */
+  /** Pages discovered by the authenticated crawl — their URLs and rendered HTML hrefs are the candidates. */
   pages: RawPage[]
   /** Target base URL, e.g. http://127.0.0.1:3000 */
   baseUrl: string
@@ -25,22 +25,52 @@ export type AccessControlDeps = {
 }
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const HREF_REGEX = /\bhref\s*=\s*["']([^"'#?\s]+)/gi
 
-/** Unique pathnames of the crawled pages, excluding the login path itself. */
-export function routePaths(pages: RawPage[], loginPath: string): string[] {
+/** Same-origin `href` targets found in a page's rendered HTML (deterministic — no LLM). */
+export function extractHrefs(html: string): string[] {
+  const out: string[] = []
+  let m: RegExpExecArray | null
+  const re = new RegExp(HREF_REGEX.source, 'gi')
+  while ((m = re.exec(html)) !== null) {
+    out.push(m[1])
+  }
+  return out
+}
+
+/**
+ * Same-origin route candidates the authenticated crawl knows about: the pathnames of crawled
+ * pages PLUS every `href` in their rendered HTML (links that were shown to the authenticated user
+ * but may never have been crawled — crawl caps, BFS order). The login path is excluded and
+ * off-origin/non-http targets are dropped. HTML is the ground truth here — deterministic, unlike
+ * the LLM-extracted transitions — so a route linked from an authenticated page is never missed.
+ */
+export function collectRoutes(pages: RawPage[], baseUrl: string, loginPath: string): string[] {
+  let origin: string
+  try {
+    origin = new URL(baseUrl).origin
+  } catch {
+    origin = ''
+  }
   const seen = new Set<string>()
   const out: string[] = []
-  for (const p of pages) {
-    let path: string
+  const add = (rawUrl: string) => {
+    let u: URL
     try {
-      path = new URL(p.url).pathname
+      u = new URL(rawUrl, baseUrl)
     } catch {
-      continue
+      return
     }
-    if (path === loginPath) continue
-    if (seen.has(path)) continue
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return
+    if (origin && u.origin !== origin) return
+    const path = u.pathname
+    if (path === loginPath || seen.has(path)) return
     seen.add(path)
     out.push(path)
+  }
+  for (const p of pages) {
+    add(p.url)
+    for (const href of extractHrefs(p.html)) add(href)
   }
   return out
 }
@@ -89,7 +119,7 @@ export async function verifyAccessControl(deps: AccessControlDeps): Promise<Veri
   const probe = deps.probe ?? defaultProbe()
   const findings: VerifyFinding[] = []
 
-  for (const path of routePaths(pages, loginPath)) {
+  for (const path of collectRoutes(pages, baseUrl, loginPath)) {
     let url: string
     try {
       url = new URL(path, baseUrl).toString()
