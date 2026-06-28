@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile, mkdir, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { rdraExport } from './rdraExport.js'
@@ -22,7 +22,6 @@ describe('rdraExport (real fs round trip)', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'rdra-'))
     await mkdir(join(dir, 'usecases'), { recursive: true })
-    // related_pages empty (Spotly-like), related_routes are API routes → api-key match.
     await writeFile(
       join(dir, 'usecases', 'analysis_result.json'),
       JSON.stringify({
@@ -36,32 +35,36 @@ describe('rdraExport (real fs round trip)', () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  it('merges matched (by API route) + writes pending + is idempotent', async () => {
+  it('writes all scenarios to pending and leaves analysis_result.json untouched', async () => {
     const into = join(dir, 'usecases', 'analysis_result.json')
+    const before = await readFile(into, 'utf8')
     const deps = {
       loadScenarios: async () => [
         scn('grow-hotel', '/hotel', ['GET /api/v2/hotels returns 200']),
         scn('grow-booking', '/booking'),
       ],
     }
-    const r1 = await rdraExport({ scenarioDir: '/unused', intoPath: into }, deps)
-    expect(r1.matched).toBe(1)
-    expect(r1.pending).toBe(1)
+    const r = await rdraExport({ scenarioDir: '/unused', intoPath: into }, deps)
+    expect(r.pending).toBe(2)
+    expect(r.pendingPath).toBe(join(dir, 'usecases', 'loop-e2e-pending.json'))
 
-    const after1 = JSON.parse(await readFile(into, 'utf8'))
-    const le = after1.scenarios.filter((s: { scenario_id: string }) => s.scenario_id === 'LE-grow-hotel')
-    expect(le).toHaveLength(1)
-    expect(le[0].usecase_id).toBe('UC-1')
-    expect(le[0].api_endpoint).toBe('GET /api/v2/hotels') // single string
-    expect(after1.metadata.total_scenarios).toBe(1)
+    // analysis_result.json is the ① Core's file — rdra-export must not modify it.
+    expect(await readFile(into, 'utf8')).toBe(before)
 
     const pending = JSON.parse(await readFile(join(dir, 'usecases', 'loop-e2e-pending.json'), 'utf8'))
-    expect(pending.pending[0].loop_e2e_id).toBe('grow-booking')
+    expect(pending.generatedBy).toBe('loop-e2e rdra-export')
+    expect(pending.pending.map((p: { loop_e2e_id: string }) => p.loop_e2e_id)).toEqual(['grow-hotel', 'grow-booking'])
+    // Structured api_endpoints survive in full for reconcile to fact-check.
+    expect(pending.pending[0].api_endpoints).toEqual([
+      { method: 'GET', path: '/api/v2/hotels', raw: 'GET /api/v2/hotels returns 200' },
+    ])
+    expect(pending.pending[0]).not.toHaveProperty('usecase_id')
+  })
 
-    // Re-run → idempotent (no duplicate LE scenario)
-    const r2 = await rdraExport({ scenarioDir: '/unused', intoPath: into }, deps)
-    expect(r2.replaced).toBe(1)
-    const after2 = JSON.parse(await readFile(into, 'utf8'))
-    expect(after2.scenarios.filter((s: { scenario_id: string }) => s.scenario_id === 'LE-grow-hotel')).toHaveLength(1)
+  it('writes no pending file when there are no scenarios', async () => {
+    const into = join(dir, 'usecases', 'analysis_result.json')
+    const r = await rdraExport({ scenarioDir: '/unused', intoPath: into }, { loadScenarios: async () => [] })
+    expect(r.pending).toBe(0)
+    await expect(access(join(dir, 'usecases', 'loop-e2e-pending.json'))).rejects.toThrow()
   })
 })
